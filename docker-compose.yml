@@ -1,0 +1,57 @@
+# Local and single-host deployment. `docker compose up` brings up Postgres and
+# the application, which migrates the database itself on startup.
+#
+# Settings come from a .env file next to this one; see .env.example.
+
+name: restest
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-restest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-restest}
+      POSTGRES_DB: ${POSTGRES_DB:-restest}
+    ports:
+      # Loopback only. The port is published so that `make run` and psql can
+      # reach the database from the host, not so that the network can.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The application waits for this rather than for the container to exist:
+      # Postgres accepts connections only well after the process starts.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restest} -d ${POSTGRES_DB:-restest}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      args:
+        # `make up` fills this in from git; a bare `docker compose build` leaves
+        # the binary reporting an unknown revision.
+        REVISION: ${RESTEST_REVISION:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      RESTEST_DATABASE_URL: postgres://${POSTGRES_USER:-restest}:${POSTGRES_PASSWORD:-restest}@db:5432/${POSTGRES_DB:-restest}?sslmode=disable
+      RESTEST_HTTP_ADDR: ":8080"
+      RESTEST_LOG_LEVEL: ${RESTEST_LOG_LEVEL:-info}
+      RESTEST_LOG_FORMAT: ${RESTEST_LOG_FORMAT:-json}
+    ports:
+      # Loopback by default: until M1 there is no authentication at all, and
+      # even after it there is no reason to put a development instance on the
+      # network by accident. Set RESTEST_BIND=0.0.0.0 to expose it deliberately.
+      - "${RESTEST_BIND:-127.0.0.1}:${RESTEST_PORT:-8080}:8080"
+    # SIGTERM starts the graceful shutdown; give it more than the default ten
+    # seconds so in-flight requests finish on their own.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  pgdata:

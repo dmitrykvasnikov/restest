@@ -1,0 +1,23 @@
+version: "2"
+sql:
+  - engine: postgresql
+    # The migrations are the schema. There is no second copy to drift from it.
+    schema: migrations
+    queries: internal/core/queries
+    gen:
+      go:
+        package: dbgen
+        out: internal/core/dbgen
+        sql_package: pgx/v5
+        # Nullable columns become pgtype values rather than pointers, so a
+        # missing value is explicit at the call site instead of a nil check
+        # waiting to happen.
+        emit_pointers_for_null_types: false
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_empty_slices: true
+        overrides:
+          # citext is an extension type; sqlc needs to be told it is text.
+          - db_type: "citext"
+            go_type: "string"

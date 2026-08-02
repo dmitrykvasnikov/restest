@@ -1,0 +1,12 @@
+# Everything the build does not need, kept out of the context so that editing a
+# document does not invalidate the image cache.
+.git
+.gitignore
+.env
+bin/
+notes/
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+Makefile
