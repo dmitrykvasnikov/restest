@@ -1,0 +1,15 @@
+# Linters beyond the default set. Kept short on purpose: a lint configuration
+# that argues about style rather than catching mistakes gets switched off.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose  # an unclosed response body leaks a connection
+    - errorlint  # error comparison that breaks the moment something is wrapped
+    - misspell
+    - nilerr     # returning nil after checking an error is almost never meant
+
+formatters:
+  enable:
+    - gofmt

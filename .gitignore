@@ -1,0 +1,9 @@
+# Local configuration, which holds the database password.
+.env
+
+# Build output.
+/bin/
+
+# Go test and coverage artefacts.
+*.out
+*.test

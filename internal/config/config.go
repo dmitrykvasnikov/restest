@@ -1,0 +1,188 @@
+// Package config loads the application configuration from the environment.
+//
+// The whole configuration is read once, at startup, and every problem found is
+// reported together. A process that starts half-configured and only fails when
+// it first touches the broken setting is much harder to diagnose than one that
+// refuses to start and says exactly what is wrong.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"strconv"
+	"time"
+)
+
+// Prefix is prepended to every environment variable name.
+const Prefix = "RESTEST_"
+
+// Config is the fully validated configuration of a restest process.
+type Config struct {
+	// HTTPAddr is the listen address of the HTTP server, as accepted by net.Listen.
+	HTTPAddr string
+	// DatabaseURL is the PostgreSQL connection string.
+	DatabaseURL string
+	// DatabaseMaxConns caps the pgx connection pool.
+	DatabaseMaxConns int32
+	// LogLevel is the minimum level written to the log.
+	LogLevel slog.Level
+	// LogFormat selects the slog handler: "json" for deployments, "text" for a
+	// readable local terminal.
+	LogFormat string
+	// ShutdownTimeout bounds how long a graceful shutdown waits for in-flight
+	// requests before the process exits anyway.
+	ShutdownTimeout time.Duration
+}
+
+// LookupFunc reads one environment variable. It has the signature of
+// os.LookupEnv so that tests can supply a fake environment.
+type LookupFunc func(key string) (string, bool)
+
+// Load reads and validates the configuration. All errors are returned joined
+// together, so a misconfigured deployment is fixed in one pass rather than one
+// restart per mistake.
+func Load(lookup LookupFunc) (Config, error) {
+	l := loader{lookup: lookup}
+
+	cfg := Config{
+		HTTPAddr:         l.str("HTTP_ADDR", ":8080"),
+		DatabaseURL:      l.requiredStr("DATABASE_URL"),
+		DatabaseMaxConns: int32(l.intVal("DATABASE_MAX_CONNS", 10, 1, 1000)),
+		LogLevel:         l.level("LOG_LEVEL", slog.LevelInfo),
+		LogFormat:        l.oneOf("LOG_FORMAT", "json", "json", "text"),
+		ShutdownTimeout:  l.duration("SHUTDOWN_TIMEOUT", 15*time.Second),
+	}
+	if err := l.err(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// RedactedDatabaseURL is the connection string with its password replaced, so
+// that the configuration can be logged at startup. A URL that cannot be parsed
+// is reported as such rather than echoed, since it may still contain a secret.
+func (c Config) RedactedDatabaseURL() string {
+	u, err := url.Parse(c.DatabaseURL)
+	if err != nil {
+		return "(unparseable)"
+	}
+	if _, hasPassword := u.User.Password(); hasPassword {
+		u.User = url.UserPassword(u.User.Username(), "xxxxx")
+	}
+	return u.String()
+}
+
+// LogValue implements slog.LogValuer so that logging a Config can never leak
+// the database password.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("http_addr", c.HTTPAddr),
+		slog.String("database_url", c.RedactedDatabaseURL()),
+		slog.Int("database_max_conns", int(c.DatabaseMaxConns)),
+		slog.String("log_level", c.LogLevel.String()),
+		slog.String("log_format", c.LogFormat),
+		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
+	)
+}
+
+// loader reads individual variables, accumulating problems instead of failing
+// on the first one.
+type loader struct {
+	lookup LookupFunc
+	errs   []error
+}
+
+func (l *loader) err() error { return errors.Join(l.errs...) }
+
+func (l *loader) fail(key string, format string, args ...any) {
+	l.errs = append(l.errs, fmt.Errorf("%s%s: %s", Prefix, key, fmt.Sprintf(format, args...)))
+}
+
+// raw returns the trimmed value and whether it was set to something non-empty.
+// An empty variable is treated as unset: in compose files and shell scripts an
+// unset variable and one set to "" are the same mistake.
+func (l *loader) raw(key string) (string, bool) {
+	v, ok := l.lookup(Prefix + key)
+	if !ok || v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+func (l *loader) str(key, def string) string {
+	if v, ok := l.raw(key); ok {
+		return v
+	}
+	return def
+}
+
+func (l *loader) requiredStr(key string) string {
+	v, ok := l.raw(key)
+	if !ok {
+		l.fail(key, "is required")
+	}
+	return v
+}
+
+func (l *loader) intVal(key string, def, min, max int) int {
+	v, ok := l.raw(key)
+	if !ok {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		l.fail(key, "%q is not a number", v)
+		return def
+	}
+	if n < min || n > max {
+		l.fail(key, "%d is out of range [%d, %d]", n, min, max)
+		return def
+	}
+	return n
+}
+
+func (l *loader) duration(key string, def time.Duration) time.Duration {
+	v, ok := l.raw(key)
+	if !ok {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		l.fail(key, "%q is not a duration such as 15s or 2m", v)
+		return def
+	}
+	if d <= 0 {
+		l.fail(key, "%s must be positive", d)
+		return def
+	}
+	return d
+}
+
+func (l *loader) level(key string, def slog.Level) slog.Level {
+	v, ok := l.raw(key)
+	if !ok {
+		return def
+	}
+	var lvl slog.Level
+	if err := lvl.UnmarshalText([]byte(v)); err != nil {
+		l.fail(key, "%q is not a level (debug, info, warn, error)", v)
+		return def
+	}
+	return lvl
+}
+
+func (l *loader) oneOf(key, def string, allowed ...string) string {
+	v, ok := l.raw(key)
+	if !ok {
+		return def
+	}
+	for _, a := range allowed {
+		if v == a {
+			return v
+		}
+	}
+	l.fail(key, "%q is not one of %v", v, allowed)
+	return def
+}
