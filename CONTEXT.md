@@ -29,8 +29,7 @@ creates, renames or reconfigures remotes.
    Branch names: `feature/NN-short-slug`, where `NN` is the feature number from §4.
 2. The feature branch is **pushed to the remote** while work is in progress, so that work in
    flight is never only on one machine.
-3. When the feature is finished it is **merged into the main branch**, and **main is pushed to
-   the remote**.
+3. When the feature is finished it goes through the **finish sequence** in §8.
 4. **Feature branches are kept** — never deleted, locally or on the remote. They are part of
    the project's record.
 
@@ -116,4 +115,26 @@ not a detail to be improvised during implementation.
 2. Tests cover the logic added, and the whole suite passes.
 3. `DESIGN.md` updated if any decision changed.
 4. Session note written in `notes/`.
-5. Branch pushed, merged into main with `--no-ff`, main pushed, branch kept.
+5. The finish sequence below has been run.
+
+### The finish sequence
+
+Once 1–4 hold and the owner says the feature is done, these five steps run in this order,
+without pausing between them:
+
+1. **Commit** everything outstanding on the feature branch.
+2. **Push** the feature branch to the remote.
+3. **Switch** to the main branch and bring it up to date with the remote.
+4. **Merge** the feature branch with `--no-ff`.
+5. **Push** the main branch.
+
+```sh
+git add -A && git commit          # 1
+git push -u origin feature/NN-…   # 2
+git switch master && git pull     # 3
+git merge --no-ff feature/NN-…    # 4
+git push                          # 5
+```
+
+The feature branch is left in place, locally and on the remote (§2.4). Step 4 is never a
+fast-forward: the merge commit is what keeps the feature visible as a unit in the graph.
