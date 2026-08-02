@@ -25,7 +25,7 @@ A Russian conversation never produces a Russian artifact.
 The GitHub remote is connected manually by the owner before development begins. No assistant
 creates, renames or reconfigures remotes.
 
-1. **Every feature is developed on its own branch**, cut from the current main branch.
+1. **Every feature is developed on its own branch**, cut from the current master branch.
    Branch names: `feature/NN-short-slug`, where `NN` is the feature number from §4.
 2. The feature branch is **pushed to the remote** while work is in progress, so that work in
    flight is never only on one machine.
@@ -124,9 +124,9 @@ without pausing between them:
 
 1. **Commit** everything outstanding on the feature branch.
 2. **Push** the feature branch to the remote.
-3. **Switch** to the main branch and bring it up to date with the remote.
+3. **Switch** to the master branch and bring it up to date with the remote.
 4. **Merge** the feature branch with `--no-ff`.
-5. **Push** the main branch.
+5. **Push** the master branch.
 
 ```sh
 git add -A && git commit          # 1
