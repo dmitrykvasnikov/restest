@@ -9,6 +9,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dmitrykvasnikov/restest/internal/core"
+	"github.com/dmitrykvasnikov/restest/internal/mock"
 )
 
 // Pinger is the narrowest view of the database: a way to ask whether it is
@@ -41,6 +43,12 @@ type Store interface {
 	ProjectByOwnerAndSlug(ctx context.Context, ownerID uuid.UUID, slug string) (core.Project, error)
 	UpdateProject(ctx context.Context, ownerID, id uuid.UUID, slug, name string) (core.Project, error)
 	DeleteProject(ctx context.Context, ownerID, id uuid.UUID) error
+
+	CreateEndpoint(ctx context.Context, ownerID, projectID uuid.UUID, in core.EndpointInput) (core.Endpoint, error)
+	EndpointsByProject(ctx context.Context, ownerID, projectID uuid.UUID) ([]core.Endpoint, error)
+	EndpointByOwnerAndID(ctx context.Context, ownerID, id uuid.UUID) (core.Endpoint, error)
+	UpdateEndpoint(ctx context.Context, ownerID, id uuid.UUID, in core.EndpointInput) (core.Endpoint, error)
+	DeleteEndpoint(ctx context.Context, ownerID, id uuid.UUID) error
 }
 
 // Options are the dependencies of a Server. A struct rather than a parameter
@@ -53,6 +61,10 @@ type Options struct {
 	// session cookie's Secure attribute rather than taking a setting of its
 	// own, because two settings for one question can disagree.
 	Sessions *scs.SessionManager
+	// Routes is the matcher behind /m/{slug}/. The handlers that change an
+	// endpoint ask it to rebuild, so it is a dependency of the UI as much as of
+	// the mock server.
+	Routes *mock.Router
 	// BaseURL is the address users reach this instance on, shown in the UI as
 	// the root of their mock URLs.
 	BaseURL string
@@ -63,6 +75,7 @@ type Server struct {
 	logger       *slog.Logger
 	store        Store
 	sessions     *scs.SessionManager
+	matcher      *mock.Router
 	templates    templateSet
 	mux          *http.ServeMux
 	baseURL      string
@@ -74,6 +87,9 @@ type Server struct {
 // parsed here rather than on first use, so a broken template stops the process
 // at startup instead of turning into a 500 for whoever hits that page first.
 func New(opts Options) (*Server, error) {
+	if opts.Routes == nil {
+		return nil, errors.New("web: Options.Routes is required")
+	}
 	templates, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -87,6 +103,7 @@ func New(opts Options) (*Server, error) {
 		logger:       opts.Logger,
 		store:        opts.Store,
 		sessions:     opts.Sessions,
+		matcher:      opts.Routes,
 		templates:    templates,
 		mux:          http.NewServeMux(),
 		baseURL:      strings.TrimRight(opts.BaseURL, "/"),
@@ -130,6 +147,18 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /projects/{slug}", s.requireUser(s.handleProjectUpdate))
 	s.mux.Handle("POST /projects/{slug}/delete", s.requireUser(s.handleProjectDelete))
 
+	// Endpoints. Listed on the project page; edited on their own.
+	s.mux.Handle("GET /projects/{slug}/endpoints/new", s.requireUser(s.handleEndpointNew))
+	s.mux.Handle("POST /projects/{slug}/endpoints", s.requireUser(s.handleEndpointCreate))
+	s.mux.Handle("GET /projects/{slug}/endpoints/{id}/edit", s.requireUser(s.handleEndpointEdit))
+	s.mux.Handle("POST /projects/{slug}/endpoints/{id}", s.requireUser(s.handleEndpointUpdate))
+	s.mux.Handle("POST /projects/{slug}/endpoints/{id}/delete", s.requireUser(s.handleEndpointDelete))
+
+	// Mock traffic. Registered without a method, because which verbs answer is
+	// the project's decision and not this router's, and skipped by the session
+	// and CSRF middleware — see isUnsessioned.
+	s.mux.HandleFunc(patternMock, s.handleMock)
+
 	// Anything else. Registered last and matched last: every pattern above is
 	// more specific, so this only sees paths nothing claimed.
 	s.mux.HandleFunc(patternCatchAll, s.handleNotFound)
@@ -164,9 +193,15 @@ func (s *Server) withSession(h http.Handler) http.Handler {
 }
 
 // isUnsessioned takes a matched route pattern, not a path.
+//
+// Mock traffic is in the list for a stronger reason than the probes and assets
+// are. It is unauthenticated by design (DESIGN.md §4), so a session would buy
+// nothing — but more to the point, it is not browser traffic: a test client
+// POSTing to a mock endpoint carries no CSRF token and must not be asked for
+// one. Sending it through nosurf would make every write to a mock 400.
 func isUnsessioned(pattern string) bool {
 	switch pattern {
-	case "GET " + pathHealthz, "GET " + pathReadyz, "GET " + pathStatic:
+	case "GET " + pathHealthz, "GET " + pathReadyz, "GET " + pathStatic, patternMock:
 		return true
 	default:
 		return false

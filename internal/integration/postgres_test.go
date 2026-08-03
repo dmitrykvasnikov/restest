@@ -15,6 +15,7 @@ import (
 
 	"github.com/dmitrykvasnikov/restest/internal/core"
 	"github.com/dmitrykvasnikov/restest/internal/database"
+	"github.com/dmitrykvasnikov/restest/internal/mock"
 	"github.com/dmitrykvasnikov/restest/internal/web"
 )
 
@@ -71,10 +72,20 @@ func newApp(t *testing.T, pool *pgxpool.Pool) (*core.Store, *web.Server) {
 	t.Cleanup(stopCleanup)
 
 	store := core.NewStore(pool)
+
+	// Loaded, not left empty, exactly as main.go does it before the listener
+	// opens. No background refresh: these tests want the reload that follows an
+	// edit to be the reason a route starts answering.
+	matcher := mock.NewRouter(store, testLogger())
+	if err := matcher.Reload(t.Context()); err != nil {
+		t.Fatalf("load route table: %v", err)
+	}
+
 	srv, err := web.New(web.Options{
 		Logger:   testLogger(),
 		Store:    store,
 		Sessions: sessions,
+		Routes:   matcher,
 		BaseURL:  "http://restest.test",
 	})
 	if err != nil {

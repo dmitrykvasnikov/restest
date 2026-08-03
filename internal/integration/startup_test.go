@@ -157,13 +157,10 @@ func TestServerIsReadyAgainstRealDatabase(t *testing.T) {
 // Readiness has to notice when the database goes away, or a load balancer keeps
 // sending traffic to an instance that cannot serve it.
 func TestReadyzFailsAfterDatabaseIsGone(t *testing.T) {
-	dsn := startPostgres(t)
-	logger := testLogger()
-
-	pool, err := database.Open(t.Context(), dsn, 4, logger)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	// Migrated, because newApp builds the route table the way main.go does and
+	// that reads two tables. What is being tested here is the pool going away
+	// afterwards, not what happens before the schema exists.
+	pool := migratedPool(t, startPostgres(t))
 	_, srv := newApp(t, pool)
 	handler := srv.Handler()
 

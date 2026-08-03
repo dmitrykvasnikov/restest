@@ -8,6 +8,7 @@ SQLC_VERSION     ?= v1.31.1
 GOLANGCI_VERSION ?= v2.12.2
 TAILWIND_VERSION ?= v4.3.3
 HTMX_VERSION     ?= 2.0.10
+CODEMIRROR_VERSION ?= 5.65.20
 
 GOOSE    := go run github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
 SQLC     := go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
@@ -91,6 +92,21 @@ vendor-htmx: ## Re-download the vendored HTMX (only when changing versions)
 	@mkdir -p $(WEB)/static/js
 	curl -fsSL -o $(WEB)/static/js/htmx.min.js \
 		https://unpkg.com/htmx.org@$(HTMX_VERSION)/dist/htmx.min.js
+
+# CodeMirror 5 rather than 6, because 6 is published only as ES modules that
+# have to be bundled, and a bundler means npm — see DESIGN.md §9.3. These are
+# the plain script files, fetched and committed, and nothing builds them.
+CODEMIRROR_FILES := lib/codemirror.js lib/codemirror.css mode/javascript/javascript.js \
+                    addon/edit/closebrackets.js addon/edit/matchbrackets.js
+
+.PHONY: vendor-codemirror
+vendor-codemirror: ## Re-download the vendored CodeMirror (only when changing versions)
+	@mkdir -p $(WEB)/static/vendor/codemirror
+	@for f in $(CODEMIRROR_FILES); do \
+		curl -fsSL -o $(WEB)/static/vendor/codemirror/$$(basename $$f) \
+			https://cdn.jsdelivr.net/npm/codemirror@$(CODEMIRROR_VERSION)/$$f || exit 1; \
+		echo "  $$f"; \
+	done
 
 # --- database -----------------------------------------------------------------
 #
