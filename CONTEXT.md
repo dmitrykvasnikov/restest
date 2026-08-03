@@ -31,10 +31,10 @@ creates, renames or reconfigures remotes.
    flight is never only on one machine.
 3. **When a milestone is finished, the finish sequence in §8 runs on its own** — commit, push,
    merge into master, push master — without waiting to be asked. "Finished" means conditions
-   1–4 of §8 hold: the milestone's "done when" is demonstrably met, the tests pass, `DESIGN.md`
-   reflects any decision that changed, and the session note is written. A completed milestone
-   sitting in one working tree, unpushed and unmerged, is the one state this project should
-   never be left in.
+   1–5 of §8 hold: the milestone's "done when" is demonstrably met, the tests pass, `DESIGN.md`
+   reflects any decision that changed, `README.md` describes the stage the project has actually
+   reached, and the session note is written. A completed milestone sitting in one working tree,
+   unpushed and unmerged, is the one state this project should never be left in.
 4. **Feature branches are kept** — never deleted, locally or on the remote. They are part of
    the project's record.
 
@@ -72,6 +72,7 @@ Feature numbers follow the milestones in `PLAN.md`:
 | 06 | M5 | Public datasets and the demo project |
 | 07 | M6 | API tokens and management API |
 | 08 | M7 | Hardening |
+| 09 | — | Documentation: `README.md`, and the rule that keeps it current (§8.4) |
 
 Work discovered later that does not fit a milestone gets the next free number and a row here.
 
@@ -79,6 +80,7 @@ Work discovered later that does not fit a milestone gets the next free number an
 
 | File | Role |
 |---|---|
+| `README.md` | The front door: what restest is, the stage it has reached, how to run it and what works today. Rewritten to match reality at every merge into master — see §8.4. |
 | `task.md` | **Frozen.** The owner's original problem statement. Never edited — decisions go elsewhere, so problem and solution stay visibly distinct. |
 | `DESIGN.md` | Decisions and their reasoning. Updated when a decision changes, with the reasoning updated too. |
 | `PLAN.md` | Milestones and their order. |
@@ -120,12 +122,17 @@ not a detail to be improvised during implementation.
 1. The milestone's "done when" condition in `PLAN.md` is demonstrably met.
 2. Tests cover the logic added, and the whole suite passes.
 3. `DESIGN.md` updated if any decision changed.
-4. Session note written in `notes/`.
-5. The finish sequence below has been run.
+4. **`README.md` updated to the stage the project has actually reached.** Nothing reaches master
+   describing a state it is no longer in. At minimum: the milestone table, what works today and
+   what does not yet, any new route, command or configuration variable, and any instruction the
+   milestone invalidated. A reader arriving at master must be able to run what master contains
+   and find it behaving as described.
+5. Session note written in `notes/`.
+6. The finish sequence below has been run.
 
 ### The finish sequence
 
-Once 1–4 hold, these five steps run in this order, without waiting to be asked and without
+Once 1–5 hold, these five steps run in this order, without waiting to be asked and without
 pausing between them:
 
 1. **Commit** everything outstanding on the feature branch.
