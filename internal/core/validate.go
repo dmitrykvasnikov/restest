@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/mail"
@@ -238,6 +239,34 @@ func validatePath(fe *FieldErrors, path string) {
 	}
 }
 
+func validateKind(fe *FieldErrors, kind string) {
+	if !slices.Contains(Kinds, kind) {
+		fe.Add("kind", "Choose one of the listed kinds.")
+	}
+}
+
+// collectionIDParam is the parameter name the expansion of a collection
+// endpoint appends to its path — /users becomes /users/{id} for the routes that
+// address a single document.
+const collectionIDParam = "id"
+
+// validateCollectionPath refuses a root path that would collide with the
+// parameter the expansion adds.
+//
+// The path is a root, not a route: a collection endpoint at /users answers six
+// requests across /users and /users/{id}. Parameters *are* allowed before that
+// point — /tenants/{tenant}/users is a legitimate place to root a collection —
+// but they name nothing the collection reads, because state is per collection
+// and not per parameter value. That is the shared-state decision in
+// DESIGN.md §12.1, and it is what per-run isolation would later change.
+func validateCollectionPath(fe *FieldErrors, path string) {
+	if slices.Contains(PathParams(path), collectionIDParam) {
+		fe.Add("path", fmt.Sprintf(
+			"A collection path cannot itself declare {%s}: the routes for a single document add it.",
+			collectionIDParam))
+	}
+}
+
 func validateStatusCode(fe *FieldErrors, status int) {
 	if status < minStatusCode || status > maxStatusCode {
 		fe.Add("status_code", fmt.Sprintf("Use a status between %d and %d.", minStatusCode, maxStatusCode))
@@ -281,6 +310,101 @@ func validateHeaders(fe *FieldErrors, headers Headers) {
 			continue
 		}
 		return
+	}
+}
+
+// Limits on a collection definition.
+const (
+	// defaultIDField is the field a collection carries its identifier in unless
+	// it is told otherwise. It is what almost every REST API uses, and a
+	// collection that accepts the default needs no decision made about it.
+	defaultIDField = "id"
+
+	maxCollectionNameLen = 40
+	maxIDFieldLen        = 40
+	// A seed is a fixture, not a database. The cap is generous enough for the
+	// datasets people actually mock and small enough that a collection page
+	// still renders.
+	maxSeedBytes    = 1 << 20 // 1 MiB
+	maxSeedElements = 5000
+)
+
+// collectionNamePattern is the shape of a collection name. It is deliberately
+// close to the slug rule — a collection name appears in the reset URL, and
+// anything needing percent-encoding there would be a name people get wrong. The
+// underscore is allowed because `line_items` is how these things are written.
+var collectionNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9_-]{0,38}[a-z0-9])?$`)
+
+// idFieldPattern is the shape of the JSON key carrying the identifier. Narrow
+// on purpose: the field is read back out of a document, written into URLs and
+// used as a filter name, and there is no reason for it to be exotic.
+var idFieldPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,39}$`)
+
+// NormalizeCollectionName puts a name into the form it is stored and addressed
+// in. Lower case, because the reset URL carries it and a URL that works in one
+// capitalisation and not another is a bug waiting to be reported.
+func NormalizeCollectionName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func validateCollectionName(fe *FieldErrors, name string) {
+	switch {
+	case name == "":
+		fe.Add("name", "Give the collection a name — it is what appears in the URL.")
+	case len(name) > maxCollectionNameLen:
+		fe.Add("name", fmt.Sprintf("Use %d characters or fewer.", maxCollectionNameLen))
+	case !collectionNamePattern.MatchString(name):
+		fe.Add("name", "Use lower-case letters, digits, hyphens and underscores, starting and ending with a letter or digit.")
+	}
+}
+
+func validateIDField(fe *FieldErrors, field string) {
+	switch {
+	case field == "":
+		fe.Add("id_field", "Name the field that carries the identifier.")
+	case len(field) > maxIDFieldLen:
+		fe.Add("id_field", fmt.Sprintf("Use %d characters or fewer.", maxIDFieldLen))
+	case !idFieldPattern.MatchString(field):
+		fe.Add("id_field", "Use letters, digits, hyphens and underscores, starting with a letter or an underscore.")
+	}
+}
+
+func validateIDStrategy(fe *FieldErrors, strategy string) {
+	if !slices.Contains(IDStrategies, strategy) {
+		fe.Add("id_strategy", "Choose one of the listed strategies.")
+	}
+}
+
+// validateSeed checks the seed as text, so that what is refused is what was
+// typed. The database would refuse a non-array too, through
+// `collections_seed_is_array`, but as a check violation rather than as a
+// sentence beside the editor.
+func validateSeed(fe *FieldErrors, seed string) {
+	if len(seed) > maxSeedBytes {
+		fe.Add("seed", "That seed is larger than 1 MiB. A fixture that big belongs in a real database.")
+		return
+	}
+
+	var elements []json.RawMessage
+	if err := json.Unmarshal([]byte(seed), &elements); err != nil {
+		if json.Valid([]byte(seed)) {
+			fe.Add("seed", "The seed has to be a JSON array, even when it holds one document.")
+			return
+		}
+		fe.Add("seed", "That is not valid JSON: "+err.Error())
+		return
+	}
+	if len(elements) > maxSeedElements {
+		fe.Add("seed", fmt.Sprintf("Use %d documents or fewer.", maxSeedElements))
+		return
+	}
+
+	for i, element := range elements {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(element, &object); err != nil {
+			fe.Add("seed", fmt.Sprintf("Entry %d is not a JSON object. Every document in a collection is an object.", i+1))
+			return
+		}
 	}
 }
 

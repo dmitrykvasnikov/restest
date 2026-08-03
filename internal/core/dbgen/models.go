@@ -40,6 +40,7 @@ type Document struct {
 	Body         []byte
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+	Seq          int64
 }
 
 type Endpoint struct {

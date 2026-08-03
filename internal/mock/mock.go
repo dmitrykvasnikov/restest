@@ -12,6 +12,8 @@
 package mock
 
 import (
+	"strings"
+
 	"github.com/dmitrykvasnikov/restest/internal/core"
 )
 
@@ -23,9 +25,102 @@ import (
 // called — /users/{id} and /users/{name} walk through the same node. The
 // matcher collects the values it passed and zips them with the names of
 // whichever route it finally reached.
+//
+// One endpoint row is not one route. A collection endpoint expands into six of
+// them, each carrying the same definition and a different Op; Method and Path on
+// the embedded endpoint are rewritten to the expanded route's own, so that a
+// suggestion list and a log line name the route that answered rather than the
+// row it came from.
 type Route struct {
 	core.MockEndpoint
 	Params []string
+	// Op is what a matched request should do. It is OpRespond for a static
+	// endpoint and one of the five collection operations otherwise.
+	Op Op
+}
+
+// Op is the operation a matched route performs.
+//
+// It is decided here, at match time, rather than by the handler looking at the
+// method again. The mapping from verb and shape to operation is part of what the
+// route table knows — POST /users and PUT /users/{id} are different routes, not
+// one route with a switch after it.
+type Op int
+
+const (
+	// OpRespond writes the endpoint's stored response. It is the only operation
+	// a static endpoint has, and the zero value, so a route built without
+	// thinking about collections behaves as it always did.
+	OpRespond Op = iota
+	// OpList answers GET on the collection root.
+	OpList
+	// OpCreate answers POST on the collection root.
+	OpCreate
+	// OpGet answers GET on a single document.
+	OpGet
+	// OpReplace answers PUT on a single document.
+	OpReplace
+	// OpPatch answers PATCH on a single document.
+	OpPatch
+	// OpDelete answers DELETE on a single document.
+	OpDelete
+)
+
+// DocumentParam is the parameter the expansion of a collection endpoint uses
+// for the identifier of a single document. A collection path is refused at
+// definition time if it already declares one (core.validateCollectionPath), so
+// the name is always the expansion's.
+const DocumentParam = "id"
+
+// collectionOps is the route set one collection endpoint expands into: the
+// four verbs of a single document, and the two of the collection itself.
+//
+// Six routes rather than one route with six behaviours, because that is what
+// makes the rest of the matcher work unchanged — /users/me still beats
+// /users/{id} whether the parameter route came from a static endpoint or from
+// this table, and a DELETE on the root still answers 405 with the verbs that
+// are defined, because no route claims it.
+var collectionOps = []struct {
+	method   string
+	document bool
+	op       Op
+}{
+	{method: "GET", op: OpList},
+	{method: "POST", op: OpCreate},
+	{method: "GET", document: true, op: OpGet},
+	{method: "PUT", document: true, op: OpReplace},
+	{method: "PATCH", document: true, op: OpPatch},
+	{method: "DELETE", document: true, op: OpDelete},
+}
+
+// expand turns one endpoint row into the routes it serves.
+func expand(endpoint core.MockEndpoint) []*Route {
+	if endpoint.Kind != core.KindCollection {
+		return []*Route{{
+			MockEndpoint: endpoint,
+			Params:       core.PathParams(endpoint.Path),
+			Op:           OpRespond,
+		}}
+	}
+
+	root := endpoint.Path
+	document := strings.TrimSuffix(root, "/") + "/{" + DocumentParam + "}"
+
+	routes := make([]*Route, 0, len(collectionOps))
+	for _, spec := range collectionOps {
+		route := endpoint
+		route.Method = spec.method
+		route.Path = root
+		if spec.document {
+			route.Path = document
+		}
+		routes = append(routes, &Route{
+			MockEndpoint: route,
+			Params:       core.PathParams(route.Path),
+			Op:           spec.op,
+		})
+	}
+	return routes
 }
 
 // Ref names a route without carrying its definition, for the "did you mean"

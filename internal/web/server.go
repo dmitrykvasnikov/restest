@@ -49,6 +49,26 @@ type Store interface {
 	EndpointByOwnerAndID(ctx context.Context, ownerID, id uuid.UUID) (core.Endpoint, error)
 	UpdateEndpoint(ctx context.Context, ownerID, id uuid.UUID, in core.EndpointInput) (core.Endpoint, error)
 	DeleteEndpoint(ctx context.Context, ownerID, id uuid.UUID) error
+
+	CreateCollection(ctx context.Context, ownerID, projectID uuid.UUID, in core.CollectionInput) (core.Collection, error)
+	CollectionsByProject(ctx context.Context, ownerID, projectID uuid.UUID) ([]core.Collection, error)
+	CollectionByOwnerAndID(ctx context.Context, ownerID, id uuid.UUID) (core.Collection, error)
+	CollectionByOwnerAndName(ctx context.Context, ownerID uuid.UUID, slug, name string) (core.Collection, error)
+	UpdateCollection(ctx context.Context, ownerID, id uuid.UUID, in core.CollectionInput) (core.Collection, error)
+	DeleteCollection(ctx context.Context, ownerID, id uuid.UUID) error
+	ResetCollection(ctx context.Context, id uuid.UUID) (int, error)
+
+	// The document operations take a collection id and no owner. By the time one
+	// is called the request has already been matched to an endpoint that names
+	// the collection, and mock traffic has no account to scope by — the route
+	// table is the authorisation, and it only ever holds collections a project
+	// deliberately exposed.
+	ListDocuments(ctx context.Context, collectionID uuid.UUID, q core.ListQuery) (core.DocumentPage, error)
+	GetDocument(ctx context.Context, collectionID uuid.UUID, publicID string) (core.Document, error)
+	CreateDocument(ctx context.Context, collectionID uuid.UUID, body []byte) (core.Document, error)
+	ReplaceDocument(ctx context.Context, collectionID uuid.UUID, publicID string, body []byte) (core.Document, error)
+	PatchDocument(ctx context.Context, collectionID uuid.UUID, publicID string, body []byte) (core.Document, error)
+	DeleteDocument(ctx context.Context, collectionID uuid.UUID, publicID string) error
 }
 
 // Options are the dependencies of a Server. A struct rather than a parameter
@@ -153,6 +173,18 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /projects/{slug}/endpoints/{id}/edit", s.requireUser(s.handleEndpointEdit))
 	s.mux.Handle("POST /projects/{slug}/endpoints/{id}", s.requireUser(s.handleEndpointUpdate))
 	s.mux.Handle("POST /projects/{slug}/endpoints/{id}/delete", s.requireUser(s.handleEndpointDelete))
+
+	// Collections. Listed on the project page alongside the endpoints, because
+	// what a project serves is both together.
+	s.mux.Handle("GET /projects/{slug}/collections/new", s.requireUser(s.handleCollectionNew))
+	s.mux.Handle("POST /projects/{slug}/collections", s.requireUser(s.handleCollectionCreate))
+	s.mux.Handle("GET /projects/{slug}/collections/{id}/edit", s.requireUser(s.handleCollectionEdit))
+	s.mux.Handle("POST /projects/{slug}/collections/{id}", s.requireUser(s.handleCollectionUpdate))
+	s.mux.Handle("POST /projects/{slug}/collections/{id}/delete", s.requireUser(s.handleCollectionDelete))
+
+	// The management API. One route so far; see api.go for why it is
+	// session-authenticated and what M6 changes about that.
+	s.mux.Handle("POST "+pathAPIReset, s.requireUserAPI(s.handleCollectionReset))
 
 	// Mock traffic. Registered without a method, because which verbs answer is
 	// the project's decision and not this router's, and skipped by the session

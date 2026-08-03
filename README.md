@@ -13,17 +13,18 @@ Single Go binary, PostgreSQL, server-rendered HTML. No npm in the toolchain, no 
 
 ## Project status
 
-**Milestones M0, M1 and M2 are done.** The mock server works: define an endpoint in the web
-interface and it answers `curl` immediately, with no restart and no deploy. State — collections
-that survive a `POST` and come back on a `GET` — is the next milestone.
+**Milestones M0 through M3 are done.** The mock server works and it holds state: define an
+endpoint or a collection in the web interface and it answers `curl` immediately, with no restart
+and no deploy. `POST` a record and the next `GET` returns it. Seeing what a client actually sent —
+the request log — is the next milestone.
 
 | Milestone | Subject | Status |
 |---|---|---|
 | M0 | Skeleton: config, logging, pgx pool, migrations, Docker, health probes | **done** |
 | M1 | Accounts and projects: Argon2id, sessions, CSRF, project CRUD | **done** |
 | M2 | Static mocks and the route matcher (`/m/{slug}/…`) | **done** |
-| M3 | Stateful collections | next |
-| M4 | Request log and inspector | planned |
+| M3 | Stateful collections: CRUD over stored documents, filters, reset to seed | **done** |
+| M4 | Request log and inspector | next |
 | M5 | Public datasets and the demo project | planned |
 | M6 | API tokens and management API | planned |
 | M7 | Hardening: rate limits, CSP, metrics, backups | planned |
@@ -46,19 +47,35 @@ that survive a `POST` and come back on a `GET` — is the next milestone.
 - **`/m/{slug}/…` serves them**, unauthenticated and without a CSRF token, because a test client
   is not a browser. An unmatched path answers 404 with the nearest defined routes listed; a path
   defined for another verb answers 405 with `Allow`.
+- **Stateful collections.** A collection is a named set of JSON documents plus a seed. An
+  endpoint of kind *collection* expands into the six REST routes over it, so a `POST` comes back
+  on the next `GET`, survives a restart, and can be filtered for.
+- **Listing queries**: `_page`, `_limit`, `_sort`, `_order`, and any `field=value` filter, served
+  by the GIN index on the document body. `X-Total-Count` says how many matched.
+- **Reset to seed**, as a button in the interface and at
+  `POST /api/v1/projects/{slug}/collections/{name}/reset` — see the limitation below.
 - Health probes, embedded and content-hashed static assets, structured JSON logs with a request
   id, graceful shutdown, migrations applied at startup.
 
 ### What does not work yet
 
-- **No state.** Endpoints are static: the same request always gets the same answer. A `POST`
-  followed by a `GET` does not return the new record. That is M3, and it is what makes the
-  "list of users" scenario actually useful.
-- No collections, documents, request log, API tokens or management API. The schema for them
-  exists in migration `00001`; the code does not.
+- **The reset route is not scriptable yet.** `/api/v1/` authenticates with the session cookie and
+  is guarded by CSRF, so the button in the interface works and a shell script does not. Exempting
+  a cookie-authenticated mutating route from CSRF is the hole the guard exists to close; a bearer
+  token is not a cookie and needs no exemption, so **M6 is what makes this route scriptable — at
+  the same URL.**
+- No request log. Every mock request is a candidate `Exchange` and none is recorded. That is M4,
+  and it is the other half of why anyone reaches for a mock server: seeing exactly what a client
+  sent.
+- No API tokens and nothing else under `/api/v1/`. The schema exists in migration `00001`; the
+  code does not.
 - No demo project — `/m/demo/…` is M5, and `demo` is a reserved slug held for it.
-- No password reset, no account deletion in the UI, no rate limiting, no CSP, no CORS headers on
-  mock responses. Reset needs a mail decision; the rest is M7.
+- **No state isolation.** Collections hold one set of documents per project, so two parallel CI
+  runs against one project interfere. `DESIGN.md` §12.1 has the additive path.
+- No password reset, no account deletion in the UI, no rate limiting, no CSP, and no CORS headers
+  by default — though an endpoint can set its own response headers, including
+  `Access-Control-Allow-Origin`, and they apply to collection responses too. Reset needs a mail
+  decision; the rest is M7.
 
 ---
 
@@ -110,7 +127,7 @@ does **not** read `.env` — compose does, the Makefile does not.
 
 ## What you can do right now
 
-A complete pass through everything M0 and M1 deliver.
+A complete pass through everything M0 to M3 deliver.
 
 **In a browser** at <http://localhost:8080>:
 
@@ -122,7 +139,7 @@ A complete pass through everything M0 and M1 deliver.
    are reserved and refused.
 3. The project page shows its mock base URL — `http://localhost:8080/m/{slug}/` — and, below it,
    the endpoints it serves.
-4. **New endpoint.** The form opens on a working example: `GET /hello` returning
+4. **New endpoint**, kind **static**. The form opens on a working example: `GET /hello` returning
    `{"message": "hello"}` with a 200. Save it and it answers at once.
    - **Path** takes named parameters in braces: `/users/{id}/posts`. A parameter is a whole
      segment — `/v{n}` is refused rather than quietly matched as literal text.
@@ -132,12 +149,25 @@ A complete pass through everything M0 and M1 deliver.
      server.
    - **Delay** holds the response for up to 60 seconds, for testing spinners and client timeouts.
    - **Enabled** off makes the endpoint invisible to the matcher without deleting it.
-5. Rename the project. Every route moves with it: the new slug answers immediately and the old one
+5. **New collection**, for state. Give it a name, say which field carries the identifier (`id` by
+   default), choose `serial` or `uuid` for new identifiers, and paste a **seed** — a JSON array of
+   objects, edited in the same CodeMirror. The seed is applied as soon as the collection is
+   created.
+6. **New endpoint**, kind **collection**, pointed at it. One row, six routes: `GET` and `POST` on
+   the path you gave, and `GET`, `PUT`, `PATCH`, `DELETE` on `/{id}` below it.
+7. Rename the project. Every route moves with it: the new slug answers immediately and the old one
    stops. The flash message says so.
-6. Delete the endpoint, or the project. The buttons are real forms that work without JavaScript,
-   with `hx-confirm` layered on top by HTMX.
-7. Log out, log back in — with a differently-cased address, which works, because the email column
-   is `citext`.
+8. **Reset** the collection from the project page. Everything written since the last reset goes,
+   the seed comes back, and the identifier counter goes back with it.
+9. Delete the endpoint, the collection, or the project. The buttons are real forms that work
+   without JavaScript, with `hx-confirm` layered on top by HTMX. Deleting a collection takes its
+   documents and the endpoint serving it.
+10. Log out, log back in — with a differently-cased address, which works, because the email column
+    is `citext`.
+
+The endpoint form shows the fields for the kind you chose and hides the other set. With JavaScript
+off it shows both, and the server reads only the fields belonging to the chosen kind, so the form
+still works.
 
 Wrong password and unknown address return the same message and take the same time: the login path
 verifies against a decoy hash when the address is not found, so timing does not leak which
@@ -179,6 +209,55 @@ A few more rules worth knowing:
 - `%2F` in a path stays inside its segment: `/users/a%2Fb` matches `/users/{id}` with
   `id = "a/b"`, and does **not** match `/users/{id}/{other}`.
 
+**With curl — a collection.** Define a collection called `users` seeded with two records and an
+endpoint of kind *collection* at `/users`, in a project called `checkout`:
+
+```sh
+curl localhost:8080/m/checkout/users
+# [{"id":1,"name":"Ada","role":"admin"},{"id":2,"name":"Alan","role":"engineer"}]
+
+curl -i -X POST localhost:8080/m/checkout/users -d '{"name":"Grace","role":"admin"}'
+# 201, Location: /m/checkout/users/3, body {"id":3,"name":"Grace","role":"admin"}
+
+curl localhost:8080/m/checkout/users/3            # the record that was just created
+curl -X PATCH localhost:8080/m/checkout/users/1 -d '{"role":"pioneer"}'   # shallow merge
+curl -X PUT   localhost:8080/m/checkout/users/2 -d '{"name":"Alan Turing"}'  # full replace
+curl -i -X DELETE localhost:8080/m/checkout/users/3    # 204, no body
+curl -X DELETE localhost:8080/m/checkout/users         # 405, Allow: GET, HEAD, POST
+```
+
+Listing takes four parameters and any number of filters:
+
+```sh
+curl 'localhost:8080/m/checkout/users?role=admin&_sort=name'
+curl 'localhost:8080/m/checkout/users?_limit=1&_page=2'
+curl -sD- 'localhost:8080/m/checkout/users' -o /dev/null | grep -i x-total-count
+```
+
+- `_page` counts from 1, `_limit` defaults to **100** and may not exceed 1000, `_sort` names a
+  document field, `_order` is `asc` or `desc`. `X-Total-Count` reports how many matched in total,
+  not how many are in the page.
+- Anything without a leading underscore is a **field filter**, so a collection with a field called
+  `page` is still filterable on it. Repeating a field asks for either value.
+- A query string has no types, so `?id=1` matches both `{"id": 1}` and `{"id": "1"}`. A value with
+  a leading zero — `?code=007` — is not a JSON number and matches only the string.
+- An unknown underscore parameter is a 400 rather than being ignored: `?_limits=5` is a typo, and
+  quietly returning the first hundred documents would look as though it had worked.
+- Identifiers are the server's. A `POST` that supplies its own `id` has it overwritten; a `PUT` or
+  `PATCH` cannot rename the document it addressed. A **seed** may state its own identifiers, and
+  allocation steps over the ones it named.
+- The unsorted listing order is insertion order, and it is the tie-break under `_sort`, so paging
+  through equal values returns each document exactly once.
+- Request bodies are capped at 1 MiB; a body that is not a JSON object is a 400.
+
+Reset from the interface, or — once M6 lands and this route takes bearer tokens — from a test
+suite:
+
+```sh
+curl -X POST localhost:8080/api/v1/projects/checkout/collections/users/reset
+# {"project":"checkout","collection":"users","documents":2}
+```
+
 **The probes**, which are the only other endpoints that need no session:
 
 ```sh
@@ -204,10 +283,12 @@ logout form and the page's own form — so a scraper wants the right one.
 | `/projects` | GET, POST | working, requires an account |
 | `/projects/new`, `/projects/{slug}`, `/projects/{slug}/edit`, `/projects/{slug}/delete` | GET, POST | working, requires an account |
 | `/projects/{slug}/endpoints`, `/endpoints/new`, `/endpoints/{id}/edit`, `/endpoints/{id}`, `/endpoints/{id}/delete` | GET, POST | working, requires an account |
+| `/projects/{slug}/collections`, `/collections/new`, `/collections/{id}/edit`, `/collections/{id}`, `/collections/{id}/delete` | GET, POST | working, requires an account |
 | `/healthz`, `/readyz` | GET | working, no session |
 | `/static/…` | GET | embedded assets, content-hashed, cached immutably |
 | `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF |
-| `/api/v1/…` | any | **M6 — not routed yet** |
+| `/api/v1/projects/{slug}/collections/{name}/reset` | POST | **working** — session cookie and CSRF today, bearer tokens in M6 |
+| the rest of `/api/v1/…` | any | **M6 — not routed yet** |
 
 Anything unmatched renders the application's own 404 page, and a path that exists under a
 different verb returns 405 with an `Allow` header rather than a misleading 404.
@@ -265,23 +346,28 @@ make test-integration  # starts Postgres 17 in a container via testcontainers-go
 
 The unit tests drive a real `httptest` server through a cookie jar: registration, login, logout,
 session renewal, cookie attributes in both the plain and TLS configurations, a stale session for a
-deleted account, project and endpoint CRUD, the HTMX delete, CSRF rejection, and the 404 and 405
-pages. The mock server is exercised through a plain client with no cookies, which is what a test
-client actually is.
+deleted account, project, endpoint and collection CRUD, the HTMX delete, CSRF rejection, and the
+404 and 405 pages. The mock server is exercised through a plain client with no cookies, which is
+what a test client actually is — including the collection routes, over an in-memory document store
+so that checking a `Location` header does not need Docker.
 
 The matcher has a table-driven suite of its own covering precedence, backtracking, trailing and
 doubled slashes, percent-encoded segments, parameter extraction, the wildcard verb, the `HEAD`
-fallback, `Allow` across every pattern a path matches, and suggestion ranking. The router is
-exercised under the race detector with readers and a rebuild running at once.
+fallback, `Allow` across every pattern a path matches, suggestion ranking, and the expansion of a
+collection endpoint into its six routes. The router is exercised under the race detector with
+readers and a rebuild running at once.
 
 The integration tests run against real Postgres — the heavy use of `jsonb` means a mocked database
 would test nothing worth testing. They cover `citext` case-insensitivity, the duplicate-address,
-duplicate-slug and duplicate-route paths through the actual unique indexes, cross-owner isolation,
-the cascade from users through projects to endpoints, and the `jsonb` round trip for response
-headers. Two of them insert deliberately invalid rows *past* the Go validation to prove the
-database constraints and the Go rules agree in both directions. `TestTheM2Milestone` walks the
-whole thing: define an endpoint in the form, `curl` it, mistype it, add a literal that outranks it,
-delete it.
+duplicate-slug, duplicate-route and duplicate-collection paths through the actual unique indexes,
+cross-owner isolation, the cascades from users through projects to endpoints, collections and
+documents, the `jsonb` round trip for response headers, identifier allocation under twelve
+concurrent creates, containment filtering against the GIN index, sorting and paging including a
+page past the end and twenty documents with an identical sort key, and reset. Several of them
+insert deliberately invalid rows *past* the Go validation to prove the database constraints and
+the Go rules agree in both directions. `TestTheM2Milestone` and `TestTheM3Milestone` walk each
+milestone end to end: define it in the form, `curl` it, and — for M3 — post, fetch, filter, delete
+and reset.
 
 ## Repository layout
 
@@ -291,11 +377,11 @@ internal/
   config/             environment configuration, validated at startup
   logging/            slog handler construction
   database/           pgx pool, migration run
-  core/               domain logic: users, projects, endpoints, hashing, validation
+  core/               domain logic: users, projects, endpoints, collections, documents
     queries/          hand-written SQL, input to sqlc
     dbgen/            sqlc output — generated, never edited
-  mock/               inbound: the radix trie, the router, route suggestions
-  web/                handlers, middleware, sessions, CSRF, the mock handler
+  mock/               inbound: the radix trie, the router, route expansion, suggestions
+  web/                handlers, middleware, sessions, CSRF, the mock and collection handlers
     templates/        Go templates, embedded
     static/           generated CSS and vendored JS and CodeMirror, embedded
   integration/        tests needing a real Postgres, behind a build tag
@@ -308,6 +394,11 @@ a background worker with no request in sight. Validation lives in `core` and ret
 by form field, so the management API in M6 enforces the same rules as the browser forms rather
 than a second copy of them. `internal/mock` speaks no HTTP at all — it takes a method and a path
 and returns a decision, which is what lets it be tested as a table rather than through a server.
+
+Most SQL is generated by sqlc from `internal/core/queries/`. The document statements are the
+exception and are assembled by hand in `internal/core/document.go`, because the number of filters
+and the sort key come from the request. Every value still travels as a bind parameter, including
+the sort key, which is applied as `body -> $n` rather than pasted into the `ORDER BY`.
 
 ## Documents
 

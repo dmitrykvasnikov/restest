@@ -6,10 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
@@ -72,13 +74,73 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 
 	conn := connect(t, dsn)
-	var version int64
+	var applied int64
 	if err := conn.QueryRow(t.Context(),
-		"select max(version_id) from goose_db_version where is_applied").Scan(&version); err != nil {
+		"select count(*) from goose_db_version where is_applied and version_id > 0").Scan(&applied); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("schema version = %d, want 1", version)
+
+	// Counted against the embedded files rather than written down, so that
+	// adding a migration does not also mean editing this test.
+	want := int64(len(migrationFiles(t)))
+	if applied != want {
+		t.Errorf("%d migrations applied, want %d — the embedded set", applied, want)
+	}
+}
+
+// migrationFiles lists the migrations that ship in the binary.
+func migrationFiles(t *testing.T) []string {
+	t.Helper()
+
+	names, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("list migrations: %v", err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no migrations are embedded")
+	}
+	return names
+}
+
+// Migration 00002 exists so that a listing has a stable order. Both halves of
+// it are checked here — the column and the index that follows it — because a
+// column that arrived without its index would be a sequential scan on every
+// listing and nothing would fail to say so.
+func TestDocumentOrderingColumn(t *testing.T) {
+	dsn := startPostgres(t)
+	if err := database.Migrate(t.Context(), dsn, testLogger()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	conn := connect(t, dsn)
+
+	var generated string
+	if err := conn.QueryRow(t.Context(), `
+		select is_identity from information_schema.columns
+		where table_name = 'documents' and column_name = 'seq'`).Scan(&generated); err != nil {
+		t.Fatalf("documents.seq is missing: %v", err)
+	}
+	if generated != "YES" {
+		t.Errorf("documents.seq is_identity = %q, want YES so nothing can supply its own", generated)
+	}
+
+	var indexes []string
+	rows, err := conn.Query(t.Context(),
+		`select indexname from pg_indexes where tablename = 'documents' order by indexname`)
+	if err != nil {
+		t.Fatalf("list indexes: %v", err)
+	}
+	indexes, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("collect indexes: %v", err)
+	}
+	if !contains(indexes, "documents_order_idx") {
+		t.Errorf("the ordering index is missing; have %v", indexes)
+	}
+	if contains(indexes, "documents_listing_idx") {
+		t.Errorf("the superseded index survived; have %v", indexes)
+	}
+	if !contains(indexes, "documents_body_gin_idx") {
+		t.Errorf("the GIN index that filters are served by is missing; have %v", indexes)
 	}
 }
 

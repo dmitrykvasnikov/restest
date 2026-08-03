@@ -86,9 +86,30 @@ func (s *Server) handleProjectShow(w http.ResponseWriter, r *http.Request, user 
 		s.serverError(w, r, fmt.Errorf("list endpoints: %w", err))
 		return
 	}
+	collections, err := s.store.CollectionsByProject(r.Context(), user.ID, project.ID)
+	if err != nil {
+		s.serverError(w, r, fmt.Errorf("list collections: %w", err))
+		return
+	}
+
+	names := make(map[string]string, len(collections))
+	rows := make([]collectionRow, len(collections))
+	for i, collection := range collections {
+		names[collection.ID.String()] = collection.Name
+		rows[i] = collectionRow{
+			Collection: collection,
+			EditPath:   collectionPath(project.Slug, collection.ID) + "/edit",
+			ResetPath:  resetPath(project.Slug, collection.Name),
+		}
+	}
 
 	data := s.newPage(r, project.Name)
-	data.Form = projectShow{Project: project, Endpoints: endpoints}
+	data.Form = projectShow{
+		Project:         project,
+		Endpoints:       endpoints,
+		Collections:     rows,
+		CollectionNames: names,
+	}
 	s.render(w, r, http.StatusOK, "project_show", data)
 }
 

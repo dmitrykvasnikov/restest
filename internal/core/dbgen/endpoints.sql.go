@@ -11,7 +11,64 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createCollectionEndpoint = `-- name: CreateCollectionEndpoint :one
+insert into endpoints (
+    project_id, method, path_pattern, kind, is_enabled, delay_ms,
+    collection_id, response_headers
+)
+select $1, $2, $3, 'collection', $4, $5,
+       $6, $7
+from projects p
+join collections c on c.project_id = p.id
+where p.id = $1 and p.owner_id = $8 and c.id = $6
+returning id, project_id, method, path_pattern, kind, is_enabled, delay_ms, status_code, response_body, collection_id, response_headers, created_at, updated_at
+`
+
+type CreateCollectionEndpointParams struct {
+	ProjectID       pgtype.UUID
+	Method          string
+	PathPattern     string
+	IsEnabled       bool
+	DelayMs         int32
+	CollectionID    pgtype.UUID
+	ResponseHeaders []byte
+	OwnerID         pgtype.UUID
+}
+
+// CreateCollectionEndpoint joins collections as well as projects, so that a
+// collection id belonging to another project cannot be attached to this one.
+func (q *Queries) CreateCollectionEndpoint(ctx context.Context, arg CreateCollectionEndpointParams) (Endpoint, error) {
+	row := q.db.QueryRow(ctx, createCollectionEndpoint,
+		arg.ProjectID,
+		arg.Method,
+		arg.PathPattern,
+		arg.IsEnabled,
+		arg.DelayMs,
+		arg.CollectionID,
+		arg.ResponseHeaders,
+		arg.OwnerID,
+	)
+	var i Endpoint
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Method,
+		&i.PathPattern,
+		&i.Kind,
+		&i.IsEnabled,
+		&i.DelayMs,
+		&i.StatusCode,
+		&i.ResponseBody,
+		&i.CollectionID,
+		&i.ResponseHeaders,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createEndpoint = `-- name: CreateEndpoint :one
+
 
 insert into endpoints (
     project_id, method, path_pattern, kind, is_enabled, delay_ms,
@@ -46,6 +103,12 @@ type CreateEndpointParams struct {
 // The two statements at the bottom are the exception. They feed the in-memory
 // route table, which serves unauthenticated mock traffic and therefore reads
 // across every account by design.
+// The two kinds get a statement each rather than one statement with nullable
+// parameters. `endpoints_kind_fields` requires a status code and no collection
+// for 'static' and the reverse for 'collection', so a single statement would be
+// one the constraint can refuse depending on what was passed — and the failure
+// would arrive as a check violation rather than as a message beside a field.
+// Two statements each satisfy the constraint by construction.
 func (q *Queries) CreateEndpoint(ctx context.Context, arg CreateEndpointParams) (Endpoint, error) {
 	row := q.db.QueryRow(ctx, createEndpoint,
 		arg.ProjectID,
@@ -271,14 +334,75 @@ func (q *Queries) MockProjects(ctx context.Context) ([]MockProjectsRow, error) {
 	return items, nil
 }
 
+const updateCollectionEndpoint = `-- name: UpdateCollectionEndpoint :one
+update endpoints e
+set method           = $1,
+    path_pattern     = $2,
+    kind             = 'collection',
+    is_enabled       = $3,
+    delay_ms         = $4,
+    status_code      = null,
+    response_body    = null,
+    collection_id    = $5,
+    response_headers = $6,
+    updated_at       = now()
+from projects p, collections c
+where e.id = $7 and p.id = e.project_id and p.owner_id = $8
+  and c.id = $5 and c.project_id = p.id
+returning e.id, e.project_id, e.method, e.path_pattern, e.kind, e.is_enabled, e.delay_ms, e.status_code, e.response_body, e.collection_id, e.response_headers, e.created_at, e.updated_at
+`
+
+type UpdateCollectionEndpointParams struct {
+	Method          string
+	PathPattern     string
+	IsEnabled       bool
+	DelayMs         int32
+	CollectionID    pgtype.UUID
+	ResponseHeaders []byte
+	ID              pgtype.UUID
+	OwnerID         pgtype.UUID
+}
+
+func (q *Queries) UpdateCollectionEndpoint(ctx context.Context, arg UpdateCollectionEndpointParams) (Endpoint, error) {
+	row := q.db.QueryRow(ctx, updateCollectionEndpoint,
+		arg.Method,
+		arg.PathPattern,
+		arg.IsEnabled,
+		arg.DelayMs,
+		arg.CollectionID,
+		arg.ResponseHeaders,
+		arg.ID,
+		arg.OwnerID,
+	)
+	var i Endpoint
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Method,
+		&i.PathPattern,
+		&i.Kind,
+		&i.IsEnabled,
+		&i.DelayMs,
+		&i.StatusCode,
+		&i.ResponseBody,
+		&i.CollectionID,
+		&i.ResponseHeaders,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateEndpoint = `-- name: UpdateEndpoint :one
 update endpoints e
 set method           = $1,
     path_pattern     = $2,
+    kind             = 'static',
     is_enabled       = $3,
     delay_ms         = $4,
     status_code      = $5,
     response_body    = $6,
+    collection_id    = null,
     response_headers = $7,
     updated_at       = now()
 from projects p
@@ -298,6 +422,10 @@ type UpdateEndpointParams struct {
 	OwnerID         pgtype.UUID
 }
 
+// Both update statements write `kind` and both sides of the kind-specific
+// columns, so that changing an endpoint from one kind to the other leaves no
+// remnant of what it was. Setting only the columns the new kind uses would
+// leave the old ones populated and the check constraint would refuse the row.
 func (q *Queries) UpdateEndpoint(ctx context.Context, arg UpdateEndpointParams) (Endpoint, error) {
 	row := q.db.QueryRow(ctx, updateEndpoint,
 		arg.Method,
