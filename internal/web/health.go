@@ -40,7 +40,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
 	defer cancel()
 
-	if err := s.db.Ping(ctx); err != nil {
+	if err := s.store.Ping(ctx); err != nil {
 		// The real error goes to the log, where it is useful. The response
 		// says only that the database is unreachable: the probe is reachable
 		// without authentication and connection strings and driver messages

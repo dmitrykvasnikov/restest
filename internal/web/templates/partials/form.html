@@ -1,0 +1,20 @@
+{{/* The CSRF field every non-HTMX mutating form carries. Called with the page
+     data, so inside a range it needs the root: {{ template "csrf" $ }}. */}}
+{{ define "csrf" }}<input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">{{ end }}
+
+{{/* One field's validation message. Called with the message itself:
+     {{ template "fieldError" (index .Errors "slug") }} */}}
+{{ define "fieldError" }}
+  {{ if . }}<p class="mt-1 text-sm text-red-700">{{ . }}</p>{{ end }}
+{{ end }}
+
+{{ define "flashes" }}
+  {{ range .Flashes }}
+    <div role="status" class="mb-4 rounded-md border px-4 py-3 text-sm
+      {{ if eq .Level "success" }}border-emerald-200 bg-emerald-50 text-emerald-900
+      {{ else if eq .Level "error" }}border-red-200 bg-red-50 text-red-900
+      {{ else }}border-sky-200 bg-sky-50 text-sky-900{{ end }}">
+      {{ .Message }}
+    </div>
+  {{ end }}
+{{ end }}

@@ -76,9 +76,22 @@ func run(ctx context.Context) error {
 
 	store := core.NewStore(pool)
 
+	sessions, stopSessionCleanup := web.NewSessionManager(pool, cfg.SecureCookies())
+	defer stopSessionCleanup()
+
+	app, err := web.New(web.Options{
+		Logger:   logger,
+		Store:    store,
+		Sessions: sessions,
+		BaseURL:  cfg.BaseURL,
+	})
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           web.New(logger, store).Handler(),
+		Handler:           app.Handler(),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

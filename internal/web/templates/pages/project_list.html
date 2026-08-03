@@ -1,0 +1,45 @@
+{{ define "content" }}
+<div class="flex items-center justify-between">
+  <h1 class="text-xl font-semibold tracking-tight">Projects</h1>
+  <a href="/projects/new" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
+    New project
+  </a>
+</div>
+
+{{ with .Form }}
+  {{ if .Projects }}
+    <ul class="mt-6 divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {{ range .Projects }}
+        <li class="flex items-center gap-4 px-4 py-4">
+          <div class="min-w-0 flex-1">
+            <a href="/projects/{{ .Slug }}" class="font-medium text-slate-900 hover:underline">{{ .Name }}</a>
+            <p class="mt-0.5 truncate text-sm text-slate-500">
+              <code>{{ $.BaseURL }}{{ .MockPath }}</code>
+            </p>
+          </div>
+          <a href="/projects/{{ .Slug }}/edit" class="text-sm text-slate-600 hover:text-slate-900">Edit</a>
+
+          {{/* A real form, so the button still works without JavaScript; HTMX
+               takes it over when it can, to ask for confirmation first. */}}
+          <form method="post" action="/projects/{{ .Slug }}/delete"
+                hx-post="/projects/{{ .Slug }}/delete"
+                hx-confirm="Delete {{ .Name }} and everything in it? This cannot be undone.">
+            {{ template "csrf" $ }}
+            <button type="submit" class="text-sm text-red-700 hover:text-red-900">Delete</button>
+          </form>
+        </li>
+      {{ end }}
+    </ul>
+  {{ else }}
+    <div class="mt-6 rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+      <p class="text-slate-600">No projects yet.</p>
+      <p class="mt-1 text-sm text-slate-500">
+        A project is the name in your mock URLs, and everything you define belongs to one.
+      </p>
+      <a href="/projects/new" class="mt-4 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
+        Create your first project
+      </a>
+    </div>
+  {{ end }}
+{{ end }}
+{{ end }}

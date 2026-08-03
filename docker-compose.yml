@@ -41,6 +41,11 @@ services:
     environment:
       RESTEST_DATABASE_URL: postgres://${POSTGRES_USER:-restest}:${POSTGRES_PASSWORD:-restest}@db:5432/${POSTGRES_DB:-restest}?sslmode=disable
       RESTEST_HTTP_ADDR: ":8080"
+      # How the outside world reaches this instance. The UI shows it as the
+      # root of every mock URL, and its scheme decides whether cookies are
+      # marked Secure — so a deployment behind TLS must set it to its https
+      # address or logging in will not work.
+      RESTEST_BASE_URL: ${RESTEST_BASE_URL:-http://localhost:8080}
       RESTEST_LOG_LEVEL: ${RESTEST_LOG_LEVEL:-info}
       RESTEST_LOG_FORMAT: ${RESTEST_LOG_FORMAT:-json}
     ports:
