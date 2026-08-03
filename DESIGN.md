@@ -92,6 +92,41 @@ parameter segments (`/users/me` wins over `/users/{id}`). First match after orde
 An unmatched request returns `404` with a JSON body naming the project and listing the
 closest defined routes — the common case is a typo, and a bare 404 wastes the user's time.
 
+The rest of the rules were settled while building M2:
+
+- **The search backtracks.** Preferring the literal child at each step is not enough on its
+  own. With `/a/b/c` and `/{x}/b/d` both defined, a request for `/a/b/d` descends into the
+  literal `a`, runs out of trie, and has to come back up and try the parameter branch. A
+  matcher that committed to the literal branch would 404 a route that exists.
+- **A parameter is a whole segment.** `/v{n}` is refused at definition time rather than
+  quietly matching the literal text `v{n}`.
+- **Parameter names belong to the route, not to the trie node.** `/users/{id}` and
+  `/users/{login}` walk through the same node; the walk collects values and the route that
+  answered names them.
+- **Slashes are normalised on both sides.** `/users`, `/users/` and `//users` are one route,
+  and the stored pattern is the normalised form — which is what makes the unique index on
+  (project, method, path) mean what it says.
+- **Matching is on the escaped path.** `r.URL.Path` has already turned `%2F` into a slash, so
+  `/users/a%2Fb` would split into three segments and hand the endpoint a parameter the client
+  never sent. Segments are split first and decoded afterwards.
+- **A method mismatch is 405 with `Allow`**, listing every verb the path answers across all
+  the patterns it matches. `OPTIONS` on a path nothing claims is answered `204` with the same
+  header rather than refused: that is the question `OPTIONS` asks.
+- **An exact verb beats `*`, and `HEAD` falls back to `GET`** — net/http discards the body of
+  a `HEAD` response, so the headers are right and the body is absent without a second route.
+- **Delay is applied before anything is written**, with the response's write deadline pushed
+  out to cover it. The alternative — raising the server's `WriteTimeout` to the 60 s ceiling
+  `delay_ms` allows — would weaken the guard on every route to accommodate a handful.
+
+Two patterns that reduce to the same shape and verb — `/users/{id}` and `/users/{name}` for
+`GET` — are a pair the database cannot refuse, because it compares the pattern text. The first
+by path order wins and the other is logged as shadowed, so the choice is deterministic and the
+dead route is not silent.
+
+The table is rebuilt from the database on any change to an endpoint or a project, and on a
+30-second timer besides. The timer is not how a new endpoint goes live; it is the answer to a
+rebuild that failed and to a second instance whose edits this one never saw.
+
 ## 5. Stateful collections
 
 Endpoints of kind `collection` implement real CRUD against stored documents, so a `POST`
@@ -171,7 +206,7 @@ Only the management API accepts them; mock traffic is unauthenticated.
 | Sessions | `alexedwards/scs` v2, Postgres store | |
 | CSRF | `justinas/nosurf` | |
 | Frontend | Go templates + HTMX + Alpine.js + Tailwind | §9.2 |
-| JSON editor | CodeMirror 6, vendored | |
+| JSON editor | CodeMirror 5, vendored | §9.3 |
 | Logging | `log/slog`, JSON | |
 | Testing | stdlib `testing`, `httptest`, testcontainers-go | real Postgres in integration tests |
 | Deploy | multi-stage Docker → distroless, compose, Caddy for TLS | |
@@ -204,6 +239,29 @@ the toolchain**.
 If the UI later grows genuinely rich, a SPA becomes reasonable — and the migration only
 rewrites the view layer, since all logic stays server-side. The reverse direction would be
 more expensive.
+
+### 9.3 Why CodeMirror 5 and not 6
+
+Decided during M2, when the editor was actually needed. The original choice was CodeMirror 6;
+it was changed because it cannot be met without breaking a harder constraint.
+
+CodeMirror 6 is published only as ES modules split across a dozen packages — `@codemirror/state`,
+`view`, `language`, `lang-json` and the rest — which have to be bundled into something a browser
+can load, and which break outright if two copies of `@codemirror/state` end up in the page.
+Bundling means a bundler, and a bundler means npm. "No npm in the toolchain" is a constraint
+this project committed to (`CONTEXT.md` §6), and it is the more valuable of the two: it is what
+keeps `go build` the whole build.
+
+The alternatives to dropping to version 5 were both worse. Vendoring a prebuilt bundle from a
+third-party build service would put an opaque 400 kB artefact in the repository that nobody can
+regenerate or audit. Shipping CodeMirror 6 without `lang-json` would give an editor with no JSON
+highlighting, which is most of what the editor is for.
+
+CodeMirror 5 ships plain script files — `codemirror.js`, `codemirror.css` and the modes and
+addons — that `curl` fetches and `go:embed` serves. `make vendor-codemirror` does the fetching,
+and is run only when the version changes. It is in maintenance rather than active development,
+which for a JSON textarea is not a problem worth solving today. Version 6 becomes available
+again the day a bundler is acceptable, and the change is one file: `static/js/editor.js`.
 
 ## 10. Phase 2 — outbound test runner (not built)
 

@@ -8,6 +8,10 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#128225;</text></svg>">
   <link rel="stylesheet" href="{{ .Asset "css/app.css" }}">
   <script src="{{ .Asset "js/htmx.min.js" }}" defer></script>
+  {{/* Pages that need more than the shared assets fill this in. The editor is
+       ~450 kB of vendored CodeMirror and belongs on the one page that uses it,
+       not on every page. */}}
+  {{ block "head" . }}{{ end }}
 </head>
 
 {{/* Every HTMX request carries the CSRF token in a header, so a form driven by

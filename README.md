@@ -13,16 +13,16 @@ Single Go binary, PostgreSQL, server-rendered HTML. No npm in the toolchain, no 
 
 ## Project status
 
-**Milestones M0 and M1 are done.** The application runs, migrates its own database, and carries
-accounts and projects end to end. The mock server itself — the thing the product is named for —
-is the next milestone.
+**Milestones M0, M1 and M2 are done.** The mock server works: define an endpoint in the web
+interface and it answers `curl` immediately, with no restart and no deploy. State — collections
+that survive a `POST` and come back on a `GET` — is the next milestone.
 
 | Milestone | Subject | Status |
 |---|---|---|
 | M0 | Skeleton: config, logging, pgx pool, migrations, Docker, health probes | **done** |
 | M1 | Accounts and projects: Argon2id, sessions, CSRF, project CRUD | **done** |
-| M2 | Static mocks and the route matcher (`/m/{slug}/…`) | next |
-| M3 | Stateful collections | planned |
+| M2 | Static mocks and the route matcher (`/m/{slug}/…`) | **done** |
+| M3 | Stateful collections | next |
 | M4 | Request log and inspector | planned |
 | M5 | Public datasets and the demo project | planned |
 | M6 | API tokens and management API | planned |
@@ -38,17 +38,27 @@ is the next milestone.
 - Project CRUD — create, list, view, rename, delete — scoped to the owner in SQL, so another
   account's project is indistinguishable from one that never existed.
 - Slug validation matching the database constraint exactly, plus a reserved-word list.
+- **Static mock endpoints.** Method, path pattern with named parameters, status code, response
+  headers, response body and a delay, edited in the browser with a CodeMirror editor for the body.
+- **The route matcher.** An in-memory radix trie per project, rebuilt from the database whenever
+  an endpoint or a project changes. A literal segment outranks a parameter, the search backtracks,
+  and a match costs tens of microseconds.
+- **`/m/{slug}/…` serves them**, unauthenticated and without a CSRF token, because a test client
+  is not a browser. An unmatched path answers 404 with the nearest defined routes listed; a path
+  defined for another verb answers 405 with `Allow`.
 - Health probes, embedded and content-hashed static assets, structured JSON logs with a request
   id, graceful shutdown, migrations applied at startup.
 
 ### What does not work yet
 
-- **No mock traffic.** `/m/{slug}/…` is not routed yet; a project page shows its future mock base
-  URL and nothing answers under it. That is M2.
-- No endpoints, collections, documents, request log, API tokens or management API. The schema for
-  them exists in migration `00001`; the code does not.
-- No password reset, no account deletion in the UI, no rate limiting, no CSP. Reset needs a mail
-  decision; the rest is M7.
+- **No state.** Endpoints are static: the same request always gets the same answer. A `POST`
+  followed by a `GET` does not return the new record. That is M3, and it is what makes the
+  "list of users" scenario actually useful.
+- No collections, documents, request log, API tokens or management API. The schema for them
+  exists in migration `00001`; the code does not.
+- No demo project — `/m/demo/…` is M5, and `demo` is a reserved slug held for it.
+- No password reset, no account deletion in the UI, no rate limiting, no CSP, no CORS headers on
+  mock responses. Reset needs a mail decision; the rest is M7.
 
 ---
 
@@ -59,7 +69,8 @@ is the next milestone.
 
 Nothing else needs installing. `goose`, `sqlc` and `golangci-lint` are pinned in the `Makefile`
 and fetched by `go run` when a target needs them; Tailwind is a single downloaded binary and its
-output stylesheet is committed, so `go build` needs neither Node nor the network.
+output stylesheet is committed, and CodeMirror is vendored as plain script files, so `go build`
+needs neither Node nor the network.
 
 ## Quick start
 
@@ -109,20 +120,66 @@ A complete pass through everything M0 and M1 deliver.
    `"  MyAPI "` becomes `myapi`, and then must be lower-case letters, digits and hyphens, starting
    and ending alphanumeric, 1–40 characters. `api`, `admin`, `demo`, `healthz`, `m` and `static`
    are reserved and refused.
-3. The project page shows its future mock base URL — `http://localhost:8080/m/{slug}` — and says
-   plainly that nothing answers there yet.
-4. Rename it. A rename is allowed, and the flash message warns that the old mock URL will stop
-   matching once M2 lands.
-5. Delete it. The button is a real form that works without JavaScript, with `hx-confirm` layered
-   on top by HTMX.
-6. Log out, log back in — with a differently-cased address, which works, because the email column
+3. The project page shows its mock base URL — `http://localhost:8080/m/{slug}/` — and, below it,
+   the endpoints it serves.
+4. **New endpoint.** The form opens on a working example: `GET /hello` returning
+   `{"message": "hello"}` with a 200. Save it and it answers at once.
+   - **Path** takes named parameters in braces: `/users/{id}/posts`. A parameter is a whole
+     segment — `/v{n}` is refused rather than quietly matched as literal text.
+   - **Response headers** are one `Name: value` per line. Leave `Content-Type` out and it is
+     guessed from the body: parsed as JSON if it parses, sniffed otherwise. Framing headers
+     (`Content-Length`, `Transfer-Encoding`, `Connection`, …) are refused — they belong to the
+     server.
+   - **Delay** holds the response for up to 60 seconds, for testing spinners and client timeouts.
+   - **Enabled** off makes the endpoint invisible to the matcher without deleting it.
+5. Rename the project. Every route moves with it: the new slug answers immediately and the old one
+   stops. The flash message says so.
+6. Delete the endpoint, or the project. The buttons are real forms that work without JavaScript,
+   with `hx-confirm` layered on top by HTMX.
+7. Log out, log back in — with a differently-cased address, which works, because the email column
    is `citext`.
 
 Wrong password and unknown address return the same message and take the same time: the login path
 verifies against a decoy hash when the address is not found, so timing does not leak which
 accounts exist.
 
-**With curl** — the probes, which are the only endpoints that need no session:
+**With curl** — the mock server, which needs no account, no cookie and no CSRF token. Define
+`GET /users/{id}` returning `{"id":1,"name":"Sam"}` and `GET /users/me` returning something else,
+in a project called `checkout`:
+
+```sh
+curl localhost:8080/m/checkout/users/7      # {"id":1,"name":"Sam"}   — the parameter route
+curl localhost:8080/m/checkout/users/me     # the literal route: it outranks the parameter
+curl localhost:8080/m/checkout/users/7/     # same answer; a trailing slash is not a new route
+curl -X POST localhost:8080/m/checkout/users/7   # 405, with Allow: GET, HEAD
+curl localhost:8080/m/checkout/userz/7      # 404 — see below
+```
+
+A 404 says what is nearby rather than only that nothing matched:
+
+```json
+{
+  "error": "no endpoint matches GET /userz/7 in project \"checkout\"",
+  "project": "checkout",
+  "method": "GET",
+  "path": "/userz/7",
+  "nearest": [
+    { "method": "GET", "path": "/users/me" },
+    { "method": "GET", "path": "/users/{id}" }
+  ]
+}
+```
+
+A few more rules worth knowing:
+
+- `HEAD` is answered from the `GET` route, headers and all, with no body.
+- `OPTIONS` on a path that defines no `OPTIONS` endpoint answers `204` with `Allow`, rather than
+  the 405 every other verb would get.
+- A method of `*` matches any verb, and an exact verb defined alongside it wins.
+- `%2F` in a path stays inside its segment: `/users/a%2Fb` matches `/users/{id}` with
+  `id = "a/b"`, and does **not** match `/users/{id}/{other}`.
+
+**The probes**, which are the only other endpoints that need no session:
 
 ```sh
 curl -i localhost:8080/healthz   # 200 {"status":"ok"} — the process is alive
@@ -146,9 +203,10 @@ logout form and the page's own form — so a scraper wants the right one.
 | `/logout` | POST | working |
 | `/projects` | GET, POST | working, requires an account |
 | `/projects/new`, `/projects/{slug}`, `/projects/{slug}/edit`, `/projects/{slug}/delete` | GET, POST | working, requires an account |
+| `/projects/{slug}/endpoints`, `/endpoints/new`, `/endpoints/{id}/edit`, `/endpoints/{id}`, `/endpoints/{id}/delete` | GET, POST | working, requires an account |
 | `/healthz`, `/readyz` | GET | working, no session |
 | `/static/…` | GET | embedded assets, content-hashed, cached immutably |
-| `/m/{slug}/…` | any | **M2 — not routed yet** |
+| `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF |
 | `/api/v1/…` | any | **M6 — not routed yet** |
 
 Anything unmatched renders the application's own 404 page, and a path that exists under a
@@ -193,7 +251,7 @@ The database password is never logged: `Config` implements `slog.LogValuer` and 
 | `make migrate`, `migrate-down`, `migrate-status`, `migrate-new NAME=…` | goose, for working on migrations |
 | `make sqlc` | Regenerate `internal/core/dbgen` from the migrations and query files |
 | `make assets` | Rebuild the stylesheet with the Tailwind standalone binary |
-| `make vendor-htmx` | Re-download vendored HTMX, only when changing versions |
+| `make vendor-htmx`, `make vendor-codemirror` | Re-download the vendored front-end files, only when changing versions |
 
 The application applies migrations itself at startup, so the `migrate` targets are for developing
 migrations, not for deployment.
@@ -207,13 +265,23 @@ make test-integration  # starts Postgres 17 in a container via testcontainers-go
 
 The unit tests drive a real `httptest` server through a cookie jar: registration, login, logout,
 session renewal, cookie attributes in both the plain and TLS configurations, a stale session for a
-deleted account, project CRUD, the HTMX delete, CSRF rejection, and the 404 and 405 pages.
+deleted account, project and endpoint CRUD, the HTMX delete, CSRF rejection, and the 404 and 405
+pages. The mock server is exercised through a plain client with no cookies, which is what a test
+client actually is.
+
+The matcher has a table-driven suite of its own covering precedence, backtracking, trailing and
+doubled slashes, percent-encoded segments, parameter extraction, the wildcard verb, the `HEAD`
+fallback, `Allow` across every pattern a path matches, and suggestion ranking. The router is
+exercised under the race detector with readers and a rebuild running at once.
 
 The integration tests run against real Postgres — the heavy use of `jsonb` means a mocked database
-would test nothing worth testing. They cover `citext` case-insensitivity, the duplicate-address
-and duplicate-slug paths through the actual unique indexes, cross-owner isolation, and the cascade
-from users to projects. One of them inserts deliberately invalid slugs *past* the Go validation to
-prove the database constraint and the Go rule agree in both directions.
+would test nothing worth testing. They cover `citext` case-insensitivity, the duplicate-address,
+duplicate-slug and duplicate-route paths through the actual unique indexes, cross-owner isolation,
+the cascade from users through projects to endpoints, and the `jsonb` round trip for response
+headers. Two of them insert deliberately invalid rows *past* the Go validation to prove the
+database constraints and the Go rules agree in both directions. `TestTheM2Milestone` walks the
+whole thing: define an endpoint in the form, `curl` it, mistype it, add a literal that outranks it,
+delete it.
 
 ## Repository layout
 
@@ -223,12 +291,13 @@ internal/
   config/             environment configuration, validated at startup
   logging/            slog handler construction
   database/           pgx pool, migration run
-  core/               domain logic: users, projects, hashing, validation
+  core/               domain logic: users, projects, endpoints, hashing, validation
     queries/          hand-written SQL, input to sqlc
     dbgen/            sqlc output — generated, never edited
-  web/                handlers, middleware, sessions, CSRF
+  mock/               inbound: the radix trie, the router, route suggestions
+  web/                handlers, middleware, sessions, CSRF, the mock handler
     templates/        Go templates, embedded
-    static/           generated CSS and vendored JS, embedded
+    static/           generated CSS and vendored JS and CodeMirror, embedded
   integration/        tests needing a real Postgres, behind a build tag
 migrations/           goose migrations, embedded
 notes/                session history, append-only
@@ -237,7 +306,8 @@ notes/                session history, append-only
 Business logic stays out of the HTTP handlers, so the phase 2 runner can drive the same logic from
 a background worker with no request in sight. Validation lives in `core` and returns errors keyed
 by form field, so the management API in M6 enforces the same rules as the browser forms rather
-than a second copy of them.
+than a second copy of them. `internal/mock` speaks no HTTP at all — it takes a method and a path
+and returns a decision, which is what lets it be tested as a table rather than through a server.
 
 ## Documents
 

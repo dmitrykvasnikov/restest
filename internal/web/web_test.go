@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dmitrykvasnikov/restest/internal/core"
+	"github.com/dmitrykvasnikov/restest/internal/mock"
 )
 
 // errNotStubbed is what an unconfigured stub method returns, so a handler
@@ -36,6 +37,17 @@ type stubStore struct {
 	projectByOwnerAndSlug func(ctx context.Context, ownerID uuid.UUID, slug string) (core.Project, error)
 	updateProject         func(ctx context.Context, ownerID, id uuid.UUID, slug, name string) (core.Project, error)
 	deleteProject         func(ctx context.Context, ownerID, id uuid.UUID) error
+
+	createEndpoint     func(ctx context.Context, ownerID, projectID uuid.UUID, in core.EndpointInput) (core.Endpoint, error)
+	endpointsByProject func(ctx context.Context, ownerID, projectID uuid.UUID) ([]core.Endpoint, error)
+	endpointByOwner    func(ctx context.Context, ownerID, id uuid.UUID) (core.Endpoint, error)
+	updateEndpoint     func(ctx context.Context, ownerID, id uuid.UUID, in core.EndpointInput) (core.Endpoint, error)
+	deleteEndpoint     func(ctx context.Context, ownerID, id uuid.UUID) error
+
+	// mockData is what the route table is rebuilt from. It doubles as
+	// mock.Source, so a test that changes an endpoint through the UI can then
+	// ask the mock server for it.
+	mockData func(ctx context.Context) (core.MockData, error)
 }
 
 func (s stubStore) Ping(ctx context.Context) error {
@@ -101,6 +113,58 @@ func (s stubStore) DeleteProject(ctx context.Context, ownerID, id uuid.UUID) err
 	return s.deleteProject(ctx, ownerID, id)
 }
 
+func (s stubStore) CreateEndpoint(ctx context.Context, ownerID, projectID uuid.UUID, in core.EndpointInput) (core.Endpoint, error) {
+	if s.createEndpoint == nil {
+		return core.Endpoint{}, errNotStubbed
+	}
+	return s.createEndpoint(ctx, ownerID, projectID, in)
+}
+
+func (s stubStore) EndpointsByProject(ctx context.Context, ownerID, projectID uuid.UUID) ([]core.Endpoint, error) {
+	if s.endpointsByProject == nil {
+		return nil, nil
+	}
+	return s.endpointsByProject(ctx, ownerID, projectID)
+}
+
+func (s stubStore) EndpointByOwnerAndID(ctx context.Context, ownerID, id uuid.UUID) (core.Endpoint, error) {
+	if s.endpointByOwner == nil {
+		return core.Endpoint{}, core.ErrNotFound
+	}
+	return s.endpointByOwner(ctx, ownerID, id)
+}
+
+func (s stubStore) UpdateEndpoint(ctx context.Context, ownerID, id uuid.UUID, in core.EndpointInput) (core.Endpoint, error) {
+	if s.updateEndpoint == nil {
+		return core.Endpoint{}, errNotStubbed
+	}
+	return s.updateEndpoint(ctx, ownerID, id, in)
+}
+
+func (s stubStore) DeleteEndpoint(ctx context.Context, ownerID, id uuid.UUID) error {
+	if s.deleteEndpoint == nil {
+		return errNotStubbed
+	}
+	return s.deleteEndpoint(ctx, ownerID, id)
+}
+
+// MockData makes the stub usable as a mock.Source as well as a Store, so one
+// value backs both the UI and the mock server in a test.
+func (s stubStore) MockData(ctx context.Context) (core.MockData, error) {
+	if s.mockData == nil {
+		return core.MockData{}, nil
+	}
+	return s.mockData(ctx)
+}
+
+// emptySource stands in when a test's store is not a mock.Source — a Store
+// built from something other than stubStore, for instance.
+type emptySource struct{}
+
+func (emptySource) MockData(context.Context) (core.MockData, error) {
+	return core.MockData{}, nil
+}
+
 // testUser is the account the stubs hand back, and testProjectID the project
 // it owns. Fixed values, so a failure names something recognisable.
 var (
@@ -132,10 +196,25 @@ func newServer(t *testing.T, store Store) *Server {
 func newServerWith(t *testing.T, store Store, tweak func(*Options)) *Server {
 	t.Helper()
 
+	logger := discardLogger()
+
+	// The route table is loaded once here rather than left empty, so that a
+	// server built over a stub with endpoints in it serves them without every
+	// test having to remember to reload.
+	source, ok := store.(mock.Source)
+	if !ok {
+		source = emptySource{}
+	}
+	matcher := mock.NewRouter(source, logger)
+	if err := matcher.Reload(t.Context()); err != nil {
+		t.Fatalf("load route table: %v", err)
+	}
+
 	opts := Options{
-		Logger:   discardLogger(),
+		Logger:   logger,
 		Store:    store,
 		Sessions: newSessionManager(false),
+		Routes:   matcher,
 		BaseURL:  "http://restest.test",
 	}
 	if tweak != nil {

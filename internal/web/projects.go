@@ -65,8 +65,14 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
+	// The route table is keyed by slug, and it has to know the project exists
+	// before it can answer "nothing is defined here" rather than "no such
+	// project" — which is why a project with no endpoints still triggers a
+	// rebuild.
+	s.reloadRoutes(r)
+
 	s.flash(r.Context(), flashSuccess, fmt.Sprintf("Project %q created.", project.Slug))
-	redirect(w, r, "/projects/"+project.Slug)
+	redirect(w, r, projectPath(project.Slug))
 }
 
 func (s *Server) handleProjectShow(w http.ResponseWriter, r *http.Request, user core.User) {
@@ -75,8 +81,14 @@ func (s *Server) handleProjectShow(w http.ResponseWriter, r *http.Request, user 
 		return
 	}
 
+	endpoints, err := s.store.EndpointsByProject(r.Context(), user.ID, project.ID)
+	if err != nil {
+		s.serverError(w, r, fmt.Errorf("list endpoints: %w", err))
+		return
+	}
+
 	data := s.newPage(r, project.Name)
-	data.Form = project
+	data.Form = projectShow{Project: project, Endpoints: endpoints}
 	s.render(w, r, http.StatusOK, "project_show", data)
 }
 
@@ -90,7 +102,7 @@ func (s *Server) handleProjectEdit(w http.ResponseWriter, r *http.Request, user 
 	data.Form = projectForm{
 		Slug:     project.Slug,
 		Name:     project.Name,
-		Action:   "/projects/" + project.Slug,
+		Action:   projectPath(project.Slug),
 		Existing: project.Slug,
 	}
 	s.render(w, r, http.StatusOK, "project_form", data)
@@ -115,11 +127,15 @@ func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request, use
 		s.rejectProject(w, r, "Edit "+project.Name, projectForm{
 			Slug:     slug,
 			Name:     name,
-			Action:   "/projects/" + project.Slug,
+			Action:   projectPath(project.Slug),
 			Existing: project.Slug,
 		}, err)
 		return
 	}
+
+	// A renamed slug moves every one of this project's routes, so the table has
+	// to be rebuilt before the new URL answers and the old one stops.
+	s.reloadRoutes(r)
 
 	if updated.Slug != project.Slug {
 		s.flash(r.Context(), flashInfo,
@@ -127,7 +143,7 @@ func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request, use
 				s.baseURL, updated.MockPath()))
 	}
 	s.flash(r.Context(), flashSuccess, "Project saved.")
-	redirect(w, r, "/projects/"+updated.Slug)
+	redirect(w, r, projectPath(updated.Slug))
 }
 
 func (s *Server) handleProjectDelete(w http.ResponseWriter, r *http.Request, user core.User) {
@@ -147,6 +163,10 @@ func (s *Server) handleProjectDelete(w http.ResponseWriter, r *http.Request, use
 		s.serverError(w, r, fmt.Errorf("delete project: %w", err))
 		return
 	}
+
+	// The endpoints went with it through `on delete cascade`, so the table has
+	// to stop serving them.
+	s.reloadRoutes(r)
 
 	s.flash(r.Context(), flashSuccess,
 		fmt.Sprintf("Project %q and everything in it was deleted.", project.Slug))

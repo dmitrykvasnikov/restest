@@ -21,6 +21,7 @@ import (
 	"github.com/dmitrykvasnikov/restest/internal/core"
 	"github.com/dmitrykvasnikov/restest/internal/database"
 	"github.com/dmitrykvasnikov/restest/internal/logging"
+	"github.com/dmitrykvasnikov/restest/internal/mock"
 	"github.com/dmitrykvasnikov/restest/internal/web"
 )
 
@@ -79,10 +80,20 @@ func run(ctx context.Context) error {
 	sessions, stopSessionCleanup := web.NewSessionManager(pool, cfg.SecureCookies())
 	defer stopSessionCleanup()
 
+	// The route table is built before the listener opens. An instance that
+	// started serving with an empty table would answer "no such project" to
+	// every mock request until the first edit rebuilt it.
+	matcher := mock.NewRouter(store, logger)
+	if err := matcher.Reload(ctx); err != nil {
+		return fmt.Errorf("route table: %w", err)
+	}
+	go matcher.Refresh(ctx, mock.RefreshInterval)
+
 	app, err := web.New(web.Options{
 		Logger:   logger,
 		Store:    store,
 		Sessions: sessions,
+		Routes:   matcher,
 		BaseURL:  cfg.BaseURL,
 	})
 	if err != nil {
