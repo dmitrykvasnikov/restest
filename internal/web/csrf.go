@@ -3,6 +3,7 @@ package web
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/justinas/nosurf"
 )
@@ -51,11 +52,22 @@ func (s *Server) withCSRF(next http.Handler) http.Handler {
 // The overwhelmingly common cause is innocent — a form left open until its
 // token expired, or a session that ended in another tab — and a user who is
 // told that can simply try again.
+//
+// A caller on the API side gets the same refusal as JSON. It has been parsing
+// JSON all along, and a page of HTML telling it to reload the form is not an
+// answer it can do anything with.
 func (s *Server) handleCSRFFailure(w http.ResponseWriter, r *http.Request) {
 	Logger(r.Context()).Warn("csrf check failed",
 		slog.String("path", r.URL.Path),
 		slog.String("reason", nosurf.Reason(r).Error()),
 	)
+
+	if strings.HasPrefix(r.URL.Path, pathAPIPrefix) {
+		writeJSON(w, r, http.StatusBadRequest, errorBody{
+			Error: "this request carried no CSRF token; /api/v1/ takes the session cookie and a token today, and bearer tokens once M6 lands",
+		})
+		return
+	}
 
 	s.renderMessage(w, r, http.StatusBadRequest,
 		"That form has expired",

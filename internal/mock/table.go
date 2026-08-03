@@ -42,21 +42,26 @@ func BuildTable(data core.MockData, logger *slog.Logger) *Table {
 			continue
 		}
 
-		route := &Route{MockEndpoint: endpoint, Params: core.PathParams(endpoint.Path)}
-		if shadowed := routes.trie.insert(route); shadowed != nil {
-			// Two patterns of the same shape and verb — /users/{id} and
-			// /users/{name}. The database compares the text and sees two
-			// different rows; the matcher sees one route and would have to pick.
-			// The first one in wins, and the other is named here rather than
-			// disappearing without a word.
-			logger.Warn("endpoint is shadowed by another of the same shape",
-				slog.String("project", endpoint.ProjectSlug),
-				slog.String("method", endpoint.Method),
-				slog.String("shadowed", endpoint.Path),
-				slog.String("serving", shadowed.Path),
-			)
+		// One row is not one route: a collection endpoint expands into the six
+		// that make up REST semantics over its documents. The trie is inserted
+		// into one route at a time either way, which is why the expansion lives
+		// here and not inside it.
+		for _, route := range expand(endpoint) {
+			if shadowed := routes.trie.insert(route); shadowed != nil {
+				// Two patterns of the same shape and verb — /users/{id} and
+				// /users/{name}. The database compares the text and sees two
+				// different rows; the matcher sees one route and would have to
+				// pick. The first one in wins, and the other is named here
+				// rather than disappearing without a word.
+				logger.Warn("endpoint is shadowed by another of the same shape",
+					slog.String("project", endpoint.ProjectSlug),
+					slog.String("method", route.Method),
+					slog.String("shadowed", route.Path),
+					slog.String("serving", shadowed.Path),
+				)
+			}
+			routes.refs = append(routes.refs, Ref{Method: route.Method, Path: route.Path})
 		}
-		routes.refs = append(routes.refs, Ref{Method: endpoint.Method, Path: endpoint.Path})
 	}
 	return t
 }

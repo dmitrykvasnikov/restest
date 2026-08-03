@@ -149,6 +149,59 @@ between runs.
 Documents are `jsonb` with GIN indexes, which is what makes arbitrary field filtering
 possible without a per-collection schema.
 
+The rest of the rules were settled while building M3:
+
+- **One endpoint row expands into six routes**, done where the table is built rather than
+  inside the trie. The trie takes routes one at a time and knows nothing about collections,
+  so `/users/me` defined statically still outranks the `/users/{id}` the expansion added,
+  and a verb nothing claims still answers 405 with the verbs that are claimed.
+- **The endpoint row is stored under the wildcard verb.** It is not a route anyone can send;
+  it is the row six routes come from. Storing it that way is also what makes the unique
+  index on (project, method, path) refuse a second collection rooted at the same place.
+- **The identifier is the server's.** A client that sends one of its own has it overwritten,
+  because two clients posting the same fixture would otherwise collide and the second would
+  get an error from a server that exists to be predictable. A *seed* may name its own ids —
+  that is how a fixture gets to say `/users/1` — and allocation steps over the ones it named.
+- **The counter is advanced in the statement that reads it**, so two concurrent creates
+  cannot be handed one number: the second waits on the row lock the first holds.
+- **A whole-number identifier is written into the document as a number**, a uuid as a string.
+  A client mocking a real API expects the type the real one would send.
+- **Filters are containment tests**, which is what the `jsonb_path_ops` GIN index can answer;
+  comparing `body ->> 'field'` would be a sequential scan. A query string has no types, so a
+  value that also reads as a JSON scalar is matched both ways — `?id=1` finds `{"id":1}` and
+  `{"id":"1"}` alike — as two containment tests ORed together, both index-backed.
+- **An unknown underscore-prefixed parameter is refused**, not ignored. The underscore
+  namespace is the server's, so `?_limits=5` is a typo; answering it with the first hundred
+  documents would look as though the parameter had worked.
+- **A listing has a default limit of 100 and a ceiling of 1000**, with `X-Total-Count` saying
+  what was left out. An unlimited listing is a promise that gets harder to keep as somebody's
+  fixture grows.
+- **Documents carry a `seq` column** (migration `00002`) and it is what an unsorted listing is
+  ordered by, and the tie-break under `_sort`. Neither existing column would do: `created_at`
+  is identical across a seed, and `id` is a random uuid, so paging could return a document
+  twice or not at all.
+- **`PATCH` is `jsonb`'s `||` — shallow, one level.** A nested object in the request replaces
+  the one in the document. A deep merge would leave no way to remove a nested field, and `PUT`
+  is there for callers who want to say what the whole document is.
+- **Saving a collection does not apply its seed.** Editing the seed prepares what the next
+  reset will restore; throwing away the documents somebody is working with as a side effect of
+  saving would be a surprise. Creating a collection *does* apply it, because a collection that
+  needs a reset before it answers is a step nobody would guess at.
+- **Reset is one transaction**, so a client reading the collection sees the old contents or
+  the new ones and never an empty collection halfway through being refilled. That matters
+  because reset is what a test suite calls between runs, and the run after it starts at once.
+
+### 5.1 What the reset route can and cannot do today
+
+`/api/v1/` is authenticated by the session cookie and guarded by CSRF, which makes the reset
+route usable from the interface and **not yet from a shell script**. The alternative was
+exempting a cookie-authenticated mutating route from CSRF, which is the hole the guard exists
+to close.
+
+A token sent as `Authorization: Bearer` is not a cookie and needs no such exemption, so M6 is
+what makes this route scriptable — at this URL, unchanged. Building bearer auth early to close
+the gap would be building M6 inside M3.
+
 ## 6. Public datasets
 
 Every project is seeded with optional built-in templates — `users`, `posts`, `comments`,
@@ -335,7 +388,11 @@ Genuinely undecided; none block starting work.
 1. **State isolation for stateful collections.** With shared per-project state, two
    parallel CI runs interfere with each other. The alternative is per-run state keyed by a
    client-supplied header. Suggested path: ship shared state, add optional isolation later
-   — it is additive.
+   — it is additive. **M3 shipped shared state**, as suggested. A collection rooted below a
+   parameter — `/tenants/{tenant}/users` — matches and collects the parameter but reads the
+   same documents whatever its value: state is per collection, not per parameter. Isolation
+   is still the nullable scope column on `documents` plus a client-supplied header, and it is
+   still additive.
 2. **Demo project reset policy** — how often, and whether anonymous writes are persisted at
    all or only echoed.
 3. **Log retention window** and body size cap.

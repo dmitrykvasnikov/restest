@@ -60,7 +60,14 @@ func (s *Server) handleMock(w http.ResponseWriter, r *http.Request) {
 
 	switch result.Outcome {
 	case mock.Matched:
-		s.serveMockResponse(w, r, result)
+		// A static endpoint writes what it was given; a collection route reads
+		// and writes documents. Which of the two this is was settled by the
+		// matcher, so there is no second look at the method here.
+		if result.Route.Op == mock.OpRespond {
+			s.serveMockResponse(w, r, result)
+		} else {
+			s.serveCollection(w, r, result)
+		}
 
 	case mock.WrongMethod:
 		allow := strings.Join(result.Allow, ", ")

@@ -44,6 +44,20 @@ type stubStore struct {
 	updateEndpoint     func(ctx context.Context, ownerID, id uuid.UUID, in core.EndpointInput) (core.Endpoint, error)
 	deleteEndpoint     func(ctx context.Context, ownerID, id uuid.UUID) error
 
+	createCollection      func(ctx context.Context, ownerID, projectID uuid.UUID, in core.CollectionInput) (core.Collection, error)
+	collectionsByProject  func(ctx context.Context, ownerID, projectID uuid.UUID) ([]core.Collection, error)
+	collectionByOwner     func(ctx context.Context, ownerID, id uuid.UUID) (core.Collection, error)
+	collectionByOwnerName func(ctx context.Context, ownerID uuid.UUID, slug, name string) (core.Collection, error)
+	updateCollection      func(ctx context.Context, ownerID, id uuid.UUID, in core.CollectionInput) (core.Collection, error)
+	deleteCollection      func(ctx context.Context, ownerID, id uuid.UUID) error
+	resetCollection       func(ctx context.Context, id uuid.UUID) (int, error)
+
+	// documents stands in for the document half of the store. It is a real
+	// little collection rather than a set of canned answers, because what the
+	// handlers are being asked about is a sequence — POST, then GET the thing
+	// that was posted — and canned answers cannot fail that.
+	documents *fakeDocuments
+
 	// mockData is what the route table is rebuilt from. It doubles as
 	// mock.Source, so a test that changes an endpoint through the UI can then
 	// ask the mock server for it.
@@ -146,6 +160,88 @@ func (s stubStore) DeleteEndpoint(ctx context.Context, ownerID, id uuid.UUID) er
 		return errNotStubbed
 	}
 	return s.deleteEndpoint(ctx, ownerID, id)
+}
+
+func (s stubStore) CreateCollection(ctx context.Context, ownerID, projectID uuid.UUID, in core.CollectionInput) (core.Collection, error) {
+	if s.createCollection == nil {
+		return core.Collection{}, errNotStubbed
+	}
+	return s.createCollection(ctx, ownerID, projectID, in)
+}
+
+func (s stubStore) CollectionsByProject(ctx context.Context, ownerID, projectID uuid.UUID) ([]core.Collection, error) {
+	if s.collectionsByProject == nil {
+		return nil, nil
+	}
+	return s.collectionsByProject(ctx, ownerID, projectID)
+}
+
+func (s stubStore) CollectionByOwnerAndID(ctx context.Context, ownerID, id uuid.UUID) (core.Collection, error) {
+	if s.collectionByOwner == nil {
+		return core.Collection{}, core.ErrNotFound
+	}
+	return s.collectionByOwner(ctx, ownerID, id)
+}
+
+func (s stubStore) CollectionByOwnerAndName(ctx context.Context, ownerID uuid.UUID, slug, name string) (core.Collection, error) {
+	if s.collectionByOwnerName == nil {
+		return core.Collection{}, core.ErrNotFound
+	}
+	return s.collectionByOwnerName(ctx, ownerID, slug, name)
+}
+
+func (s stubStore) UpdateCollection(ctx context.Context, ownerID, id uuid.UUID, in core.CollectionInput) (core.Collection, error) {
+	if s.updateCollection == nil {
+		return core.Collection{}, errNotStubbed
+	}
+	return s.updateCollection(ctx, ownerID, id, in)
+}
+
+func (s stubStore) DeleteCollection(ctx context.Context, ownerID, id uuid.UUID) error {
+	if s.deleteCollection == nil {
+		return errNotStubbed
+	}
+	return s.deleteCollection(ctx, ownerID, id)
+}
+
+func (s stubStore) ResetCollection(ctx context.Context, id uuid.UUID) (int, error) {
+	if s.resetCollection == nil {
+		return 0, errNotStubbed
+	}
+	return s.resetCollection(ctx, id)
+}
+
+func (s stubStore) ListDocuments(_ context.Context, collectionID uuid.UUID, q core.ListQuery) (core.DocumentPage, error) {
+	return s.docs().list(collectionID, q)
+}
+
+func (s stubStore) GetDocument(_ context.Context, collectionID uuid.UUID, publicID string) (core.Document, error) {
+	return s.docs().get(collectionID, publicID)
+}
+
+func (s stubStore) CreateDocument(_ context.Context, collectionID uuid.UUID, body []byte) (core.Document, error) {
+	return s.docs().create(collectionID, body)
+}
+
+func (s stubStore) ReplaceDocument(_ context.Context, collectionID uuid.UUID, publicID string, body []byte) (core.Document, error) {
+	return s.docs().write(collectionID, publicID, body, false)
+}
+
+func (s stubStore) PatchDocument(_ context.Context, collectionID uuid.UUID, publicID string, body []byte) (core.Document, error) {
+	return s.docs().write(collectionID, publicID, body, true)
+}
+
+func (s stubStore) DeleteDocument(_ context.Context, collectionID uuid.UUID, publicID string) error {
+	return s.docs().remove(collectionID, publicID)
+}
+
+// docs is the stub's document store, or an empty one for tests that never
+// asked for documents and should see an empty collection rather than a panic.
+func (s stubStore) docs() *fakeDocuments {
+	if s.documents == nil {
+		return newFakeDocuments()
+	}
+	return s.documents
 }
 
 // MockData makes the stub usable as a mock.Source as well as a Store, so one

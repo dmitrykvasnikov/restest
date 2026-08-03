@@ -8,6 +8,7 @@
   <script src="{{ .Asset "vendor/codemirror/closebrackets.js" }}" defer></script>
   <script src="{{ .Asset "vendor/codemirror/matchbrackets.js" }}" defer></script>
   <script src="{{ .Asset "js/editor.js" }}" defer></script>
+  <script src="{{ .Asset "js/forms.js" }}" defer></script>
 {{ end }}
 
 {{ define "content" }}
@@ -27,7 +28,7 @@
     {{ if .DeleteAction }}
       <form method="post" action="{{ .DeleteAction }}"
             hx-post="{{ .DeleteAction }}"
-            hx-confirm="Delete {{ .Method }} {{ .Path }}? It will stop answering at once.">
+            hx-confirm="Delete this endpoint? It will stop answering at once.">
         {{ template "csrf" $ }}
         <button type="submit"
                 class="rounded-md border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50">
@@ -40,87 +41,148 @@
   <form method="post" action="{{ .Action }}" class="mt-6 space-y-5">
     {{ template "csrf" $ }}
 
-    <div class="grid gap-4 sm:grid-cols-[8rem_1fr]">
-      <div>
-        <label for="method" class="block text-sm font-medium text-slate-700">Method</label>
-        <select id="method" name="method"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
-          {{ $selected := .Method }}
-          {{ range .Methods }}
-            <option value="{{ . }}" {{ if eq . $selected }}selected{{ end }}>
-              {{ if eq . "*" }}* (any){{ else }}{{ . }}{{ end }}
-            </option>
-          {{ end }}
-        </select>
-        {{ template "fieldError" (index $.Errors "method") }}
-      </div>
-
-      <div>
-        <label for="path" class="block text-sm font-medium text-slate-700">Path</label>
-        <div class="mt-1 flex items-stretch">
-          <span class="inline-flex items-center rounded-l-md border border-r-0 border-slate-300 bg-slate-100 px-3 font-mono text-sm text-slate-500">
-            /m/{{ .Project.Slug }}
+    {{/* The kind decides which half of this form applies. Both halves are
+         rendered; static/js/forms.js hides the one that does not, and with the
+         script off the server still reads only the fields of the chosen kind. */}}
+    <fieldset data-kind-toggle="kind">
+      <legend class="text-sm font-medium text-slate-700">Kind</legend>
+      <div class="mt-2 grid gap-3 sm:grid-cols-2">
+        {{ $kind := .Kind }}
+        <label class="flex cursor-pointer items-start gap-2 rounded-md border border-slate-300 bg-white p-3 hover:bg-slate-50">
+          <input type="radio" name="kind" value="static" {{ if ne $kind "collection" }}checked{{ end }}
+                 class="mt-0.5 h-4 w-4 border-slate-300 text-slate-900 focus:ring-slate-500">
+          <span>
+            <span class="block text-sm font-medium text-slate-800">Static</span>
+            <span class="block text-xs text-slate-500">One verb, one path, the same answer every time.</span>
           </span>
-          <input id="path" name="path" type="text" required maxlength="512"
-                 value="{{ .Path }}" spellcheck="false" autocapitalize="off" autocomplete="off"
-                 class="block w-full rounded-r-md border border-slate-300 px-3 py-2 font-mono shadow-sm focus:border-slate-500 focus:ring-slate-500">
-        </div>
-        <p class="mt-1 text-xs text-slate-500">
-          Named parameters go in braces: <code class="rounded bg-slate-100 px-1 py-0.5">/users/{id}/posts</code>.
-          A whole segment at a time — <code class="rounded bg-slate-100 px-1 py-0.5">/v{n}</code> is not a parameter.
-        </p>
-        {{ template "fieldError" (index $.Errors "path") }}
+        </label>
+        <label class="flex cursor-pointer items-start gap-2 rounded-md border border-slate-300 bg-white p-3 hover:bg-slate-50">
+          <input type="radio" name="kind" value="collection" {{ if eq $kind "collection" }}checked{{ end }}
+                 class="mt-0.5 h-4 w-4 border-slate-300 text-slate-900 focus:ring-slate-500">
+          <span>
+            <span class="block text-sm font-medium text-slate-800">Collection</span>
+            <span class="block text-xs text-slate-500">Six REST routes over stored documents, so a POST comes back on the next GET.</span>
+          </span>
+        </label>
+      </div>
+      {{ template "fieldError" (index $.Errors "kind") }}
+    </fieldset>
+
+    <div>
+      <label for="path" class="block text-sm font-medium text-slate-700">Path</label>
+      <div class="mt-1 flex items-stretch">
+        <span class="inline-flex items-center rounded-l-md border border-r-0 border-slate-300 bg-slate-100 px-3 font-mono text-sm text-slate-500">
+          /m/{{ .Project.Slug }}
+        </span>
+        <input id="path" name="path" type="text" required maxlength="512"
+               value="{{ .Path }}" spellcheck="false" autocapitalize="off" autocomplete="off"
+               class="block w-full rounded-r-md border border-slate-300 px-3 py-2 font-mono shadow-sm focus:border-slate-500 focus:ring-slate-500">
+      </div>
+      <p class="mt-1 text-xs text-slate-500">
+        Named parameters go in braces: <code class="rounded bg-slate-100 px-1 py-0.5">/users/{id}/posts</code>.
+        A whole segment at a time — <code class="rounded bg-slate-100 px-1 py-0.5">/v{n}</code> is not a parameter.
+        For a collection this is the root: <code class="rounded bg-slate-100 px-1 py-0.5">/users</code> also
+        serves <code class="rounded bg-slate-100 px-1 py-0.5">/users/{id}</code>.
+      </p>
+      {{ template "fieldError" (index $.Errors "path") }}
+    </div>
+
+    {{/* ---------------------------------------------------- collection */}}
+    <div data-kind="collection" class="space-y-5">
+      <div>
+        <label for="collection_id" class="block text-sm font-medium text-slate-700">Collection</label>
+        {{ if .Collections }}
+          <select id="collection_id" name="collection_id"
+                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
+            {{ $chosen := .CollectionID }}
+            {{ range .Collections }}
+              <option value="{{ .ID }}" {{ if eq .ID.String $chosen }}selected{{ end }}>
+                {{ .Name }} — {{ .Documents }} document{{ if ne .Documents 1 }}s{{ end }}, {{ .IDStrategy }} ids
+              </option>
+            {{ end }}
+          </select>
+          <p class="mt-1 text-xs text-slate-500">
+            GET, POST on the path above; GET, PUT, PATCH, DELETE one document below it.
+            The response body, status and method are the collection's to decide.
+          </p>
+        {{ else }}
+          <p class="mt-1 rounded-md border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-600">
+            This project has no collections yet.
+            <a href="/projects/{{ .Project.Slug }}/collections/new"
+               class="font-medium text-slate-900 underline underline-offset-2">Define one first</a>,
+            then come back and point an endpoint at it.
+          </p>
+        {{ end }}
+        {{ template "fieldError" (index $.Errors "collection_id") }}
       </div>
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div>
-        <label for="status_code" class="block text-sm font-medium text-slate-700">Status code</label>
-        <input id="status_code" name="status_code" type="number" required min="100" max="599"
-               value="{{ .StatusCode }}"
-               class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
-        {{ template "fieldError" (index $.Errors "status_code") }}
+    {{/* -------------------------------------------------------- static */}}
+    <div data-kind="static" class="space-y-5">
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label for="method" class="block text-sm font-medium text-slate-700">Method</label>
+          <select id="method" name="method"
+                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
+            {{ $selected := .Method }}
+            {{ range .Methods }}
+              <option value="{{ . }}" {{ if eq . $selected }}selected{{ end }}>
+                {{ if eq . "*" }}* (any){{ else }}{{ . }}{{ end }}
+              </option>
+            {{ end }}
+          </select>
+          {{ template "fieldError" (index $.Errors "method") }}
+        </div>
+
+        <div>
+          <label for="status_code" class="block text-sm font-medium text-slate-700">Status code</label>
+          <input id="status_code" name="status_code" type="number" required min="100" max="599"
+                 value="{{ .StatusCode }}"
+                 class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
+          {{ template "fieldError" (index $.Errors "status_code") }}
+        </div>
       </div>
 
       <div>
-        <label for="delay_ms" class="block text-sm font-medium text-slate-700">Delay</label>
-        <div class="mt-1 flex items-stretch">
-          <input id="delay_ms" name="delay_ms" type="number" min="0" max="60000"
-                 value="{{ .DelayMS }}"
-                 class="block w-full rounded-l-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
-          <span class="inline-flex items-center rounded-r-md border border-l-0 border-slate-300 bg-slate-100 px-3 text-sm text-slate-500">ms</span>
+        <div class="flex items-end justify-between gap-3">
+          <label for="body" class="block text-sm font-medium text-slate-700">Response body</label>
+          <button type="button" data-format-json="body"
+                  class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
+            Format JSON
+          </button>
         </div>
-        <p class="mt-1 text-xs text-slate-500">Held before answering, for testing timeouts and spinners.</p>
-        {{ template "fieldError" (index $.Errors "delay_ms") }}
+        {{/* data-editor is what static/js/editor.js looks for. Without JavaScript
+             this stays an ordinary textarea and the form still works. */}}
+        <textarea id="body" name="body" rows="14" spellcheck="false" data-editor="json"
+                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500">{{ .Body }}</textarea>
+        <p class="mt-1 text-xs text-slate-500">Served verbatim. It does not have to be JSON.</p>
+        {{ template "fieldError" (index $.Errors "body") }}
       </div>
     </div>
 
+    {{/* ------------------------------------------------ both kinds */}}
     <div>
       <label for="headers" class="block text-sm font-medium text-slate-700">Response headers</label>
       <textarea id="headers" name="headers" rows="3" spellcheck="false"
                 class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500">{{ .Headers }}</textarea>
       <p class="mt-1 text-xs text-slate-500">
-        One per line, as <code class="rounded bg-slate-100 px-1 py-0.5">Name: value</code>. Leave
-        Content-Type out and it is guessed from the body. Framing headers such as Content-Length
+        One per line, as <code class="rounded bg-slate-100 px-1 py-0.5">Name: value</code>. Set on
+        every response this endpoint sends, of either kind. Framing headers such as Content-Length
         are the server's and cannot be set here.
       </p>
       {{ template "fieldError" (index $.Errors "headers") }}
     </div>
 
     <div>
-      <div class="flex items-end justify-between gap-3">
-        <label for="body" class="block text-sm font-medium text-slate-700">Response body</label>
-        <button type="button" data-format-json="body"
-                class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
-          Format JSON
-        </button>
+      <label for="delay_ms" class="block text-sm font-medium text-slate-700">Delay</label>
+      <div class="mt-1 flex max-w-xs items-stretch">
+        <input id="delay_ms" name="delay_ms" type="number" min="0" max="60000"
+               value="{{ .DelayMS }}"
+               class="block w-full rounded-l-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
+        <span class="inline-flex items-center rounded-r-md border border-l-0 border-slate-300 bg-slate-100 px-3 text-sm text-slate-500">ms</span>
       </div>
-      {{/* data-editor is what static/js/editor.js looks for. Without JavaScript
-           this stays an ordinary textarea and the form still works. */}}
-      <textarea id="body" name="body" rows="14" spellcheck="false" data-editor="json"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm shadow-sm focus:border-slate-500 focus:ring-slate-500">{{ .Body }}</textarea>
-      <p class="mt-1 text-xs text-slate-500">Served verbatim. It does not have to be JSON.</p>
-      {{ template "fieldError" (index $.Errors "body") }}
+      <p class="mt-1 text-xs text-slate-500">Held before answering, for testing timeouts and spinners.</p>
+      {{ template "fieldError" (index $.Errors "delay_ms") }}
     </div>
 
     <div class="flex items-start gap-2">
