@@ -8,8 +8,13 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/dmitrykvasnikov/restest/internal/core/dbgen"
@@ -38,4 +43,28 @@ func (s *Store) Ping(ctx context.Context) error {
 		return fmt.Errorf("check database: %w", err)
 	}
 	return nil
+}
+
+// Pool exposes the connection pool for the few things that need the driver
+// itself rather than a query — the session store, for one. Nothing that can be
+// expressed as a method on Store should reach for this.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
+// The domain types below use uuid.UUID and time.Time rather than the pgtype
+// values sqlc generates. The conversions are the boundary: above it, no package
+// needs to know which driver produced the row.
+
+func toUUID(v pgtype.UUID) uuid.UUID { return uuid.UUID(v.Bytes) }
+
+func fromUUID(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
+
+func toTime(v pgtype.Timestamptz) time.Time { return v.Time }
+
+// uniqueViolation reports whether err is Postgres error 23505 raised by the
+// named constraint. The constraint is checked as well as the code, because a
+// table can have more than one unique index and they mean different things to
+// the user.
+func uniqueViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }

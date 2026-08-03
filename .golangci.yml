@@ -10,6 +10,15 @@ linters:
     - misspell
     - nilerr     # returning nil after checking an error is almost never meant
 
+  exclusions:
+    rules:
+      # The test clients read and close every response through one helper,
+      # which bodyclose cannot see through. Suppressing it here is better than
+      # scattering nolint comments over every call site.
+      - path: _test\.go
+        linters:
+          - bodyclose
+
 formatters:
   enable:
     - gofmt

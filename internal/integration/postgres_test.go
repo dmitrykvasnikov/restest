@@ -9,8 +9,13 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/dmitrykvasnikov/restest/internal/core"
+	"github.com/dmitrykvasnikov/restest/internal/database"
+	"github.com/dmitrykvasnikov/restest/internal/web"
 )
 
 // postgresImage is the version the project deploys, per docker-compose.yml.
@@ -38,6 +43,44 @@ func startPostgres(t *testing.T) string {
 		t.Fatalf("connection string: %v", err)
 	}
 	return dsn
+}
+
+// migratedPool brings a fresh database up to the current schema and returns a
+// pool over it, which is the first half of what main.go does at startup.
+func migratedPool(t *testing.T, dsn string) *pgxpool.Pool {
+	t.Helper()
+
+	if err := database.Migrate(t.Context(), dsn, testLogger()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	pool, err := database.Open(t.Context(), dsn, 4, testLogger())
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// newApp wires the application over pool the way main.go does, so that what the
+// tests drive is the real assembly rather than a convenient approximation.
+func newApp(t *testing.T, pool *pgxpool.Pool) (*core.Store, *web.Server) {
+	t.Helper()
+
+	sessions, stopCleanup := web.NewSessionManager(pool, false)
+	t.Cleanup(stopCleanup)
+
+	store := core.NewStore(pool)
+	srv, err := web.New(web.Options{
+		Logger:   testLogger(),
+		Store:    store,
+		Sessions: sessions,
+		BaseURL:  "http://restest.test",
+	})
+	if err != nil {
+		t.Fatalf("build web server: %v", err)
+	}
+	return store, srv
 }
 
 // connect opens a single connection for a test to inspect the database with,

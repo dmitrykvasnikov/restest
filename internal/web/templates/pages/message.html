@@ -1,0 +1,10 @@
+{{ define "content" }}
+<div class="mx-auto max-w-md py-10 text-center">
+  <h1 class="text-xl font-semibold tracking-tight">{{ .Title }}</h1>
+  <p class="mt-3 text-slate-600">{{ .Message }}</p>
+  <a href="{{ if .User }}/projects{{ else }}/{{ end }}"
+     class="mt-6 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
+    {{ if .User }}Back to projects{{ else }}Go to the start{{ end }}
+  </a>
+</div>
+{{ end }}

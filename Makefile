@@ -6,6 +6,8 @@
 GOOSE_VERSION    ?= v3.27.3
 SQLC_VERSION     ?= v1.31.1
 GOLANGCI_VERSION ?= v2.12.2
+TAILWIND_VERSION ?= v4.3.3
+HTMX_VERSION     ?= 2.0.10
 
 GOOSE    := go run github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
 SQLC     := go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
@@ -60,6 +62,35 @@ fmt: ## Format the source
 .PHONY: tidy
 tidy: ## Tidy the module
 	go mod tidy
+
+# --- front-end assets ---------------------------------------------------------
+#
+# No npm, ever (DESIGN.md §9.2). Tailwind is one downloaded binary, HTMX is one
+# vendored file, and the generated stylesheet is committed so that `go build`
+# needs neither of them.
+
+WEB          := internal/web
+TAILWIND_BIN := bin/tailwindcss
+# Release assets are named for the platform: linux-x64, macos-arm64, and so on.
+TAILWIND_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')
+TAILWIND_ARCH := $(shell uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')
+TAILWIND_URL  := https://github.com/tailwindlabs/tailwindcss/releases/download/$(TAILWIND_VERSION)/tailwindcss-$(TAILWIND_OS)-$(TAILWIND_ARCH)
+
+$(TAILWIND_BIN):
+	@mkdir -p $(dir $@)
+	curl -fsSL -o $@ $(TAILWIND_URL)
+	chmod +x $@
+
+.PHONY: assets
+assets: $(TAILWIND_BIN) ## Rebuild the stylesheet from the templates
+	@mkdir -p $(WEB)/static/css
+	$(TAILWIND_BIN) -i $(WEB)/tailwind.css -o $(WEB)/static/css/app.css --minify
+
+.PHONY: vendor-htmx
+vendor-htmx: ## Re-download the vendored HTMX (only when changing versions)
+	@mkdir -p $(WEB)/static/js
+	curl -fsSL -o $(WEB)/static/js/htmx.min.js \
+		https://unpkg.com/htmx.org@$(HTMX_VERSION)/dist/htmx.min.js
 
 # --- database -----------------------------------------------------------------
 #

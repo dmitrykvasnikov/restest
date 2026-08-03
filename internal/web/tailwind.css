@@ -1,0 +1,17 @@
+/* Input to the Tailwind standalone binary; see `make assets`.
+ *
+ * The generated stylesheet is static/css/app.css, which is committed and
+ * embedded in the binary. This file is not: it is a build input, and nothing
+ * serves it.
+ *
+ * Tailwind v4 is configured in CSS rather than in a JavaScript config file,
+ * which is what lets the whole toolchain be one downloaded binary and keeps npm
+ * out of the project (DESIGN.md §9.2).
+ */
+
+@import "tailwindcss";
+
+/* Where to look for class names. Stated explicitly rather than left to
+ * auto-detection, so that moving the templates breaks the build loudly instead
+ * of quietly producing a stylesheet with half the rules missing. */
+@source "./templates/**/*.html";

@@ -1,0 +1,51 @@
+{{ define "content" }}
+{{ with .Form }}
+<div class="mx-auto max-w-xl">
+  <h1 class="text-xl font-semibold tracking-tight">
+    {{ if .Existing }}Edit project{{ else }}New project{{ end }}
+  </h1>
+
+  <form method="post" action="{{ .Action }}" class="mt-6 space-y-5">
+    {{ template "csrf" $ }}
+
+    <div>
+      <label for="name" class="block text-sm font-medium text-slate-700">Name</label>
+      <input id="name" name="name" type="text" required autofocus maxlength="80"
+             value="{{ .Name }}"
+             class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
+      <p class="mt-1 text-xs text-slate-500">What you will call it in this interface.</p>
+      {{ template "fieldError" (index $.Errors "name") }}
+    </div>
+
+    <div>
+      <label for="slug" class="block text-sm font-medium text-slate-700">Slug</label>
+      <div class="mt-1 flex items-stretch">
+        <span class="inline-flex items-center rounded-l-md border border-r-0 border-slate-300 bg-slate-100 px-3 text-sm text-slate-500">
+          {{ $.BaseURL }}/m/
+        </span>
+        <input id="slug" name="slug" type="text" required maxlength="40"
+               pattern="[a-z0-9]([a-z0-9\-]{0,38}[a-z0-9])?"
+               value="{{ .Slug }}"
+               class="block w-full rounded-r-md border border-slate-300 px-3 py-2 shadow-sm focus:border-slate-500 focus:ring-slate-500">
+      </div>
+      <p class="mt-1 text-xs text-slate-500">
+        Lower-case letters, digits and hyphens. This is the name in your mock URLs.
+        {{ if .Existing }}
+          Changing it moves the project: anything already pointed at the old URL will stop matching.
+        {{ end }}
+      </p>
+      {{ template "fieldError" (index $.Errors "slug") }}
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+              class="rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700">
+        {{ if .Existing }}Save changes{{ else }}Create project{{ end }}
+      </button>
+      <a href="{{ if .Existing }}/projects/{{ .Existing }}{{ else }}/projects{{ end }}"
+         class="text-sm text-slate-600 hover:text-slate-900">Cancel</a>
+    </div>
+  </form>
+</div>
+{{ end }}
+{{ end }}

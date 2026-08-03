@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,11 @@ const Prefix = "RESTEST_"
 type Config struct {
 	// HTTPAddr is the listen address of the HTTP server, as accepted by net.Listen.
 	HTTPAddr string
+	// BaseURL is the address the outside world reaches this instance on, with
+	// no trailing slash. It is what the UI shows users as the root of their
+	// mock URLs, and its scheme decides whether cookies are marked Secure —
+	// which is why one setting covers both rather than two that can disagree.
+	BaseURL string
 	// DatabaseURL is the PostgreSQL connection string.
 	DatabaseURL string
 	// DatabaseMaxConns caps the pgx connection pool.
@@ -48,6 +54,7 @@ func Load(lookup LookupFunc) (Config, error) {
 
 	cfg := Config{
 		HTTPAddr:         l.str("HTTP_ADDR", ":8080"),
+		BaseURL:          l.httpURL("BASE_URL", "http://localhost:8080"),
 		DatabaseURL:      l.requiredStr("DATABASE_URL"),
 		DatabaseMaxConns: int32(l.intVal("DATABASE_MAX_CONNS", 10, 1, 1000)),
 		LogLevel:         l.level("LOG_LEVEL", slog.LevelInfo),
@@ -58,6 +65,15 @@ func Load(lookup LookupFunc) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// SecureCookies reports whether session and CSRF cookies should carry the
+// Secure attribute. It follows the scheme of BaseURL, because a Secure cookie
+// is never sent over plain HTTP: hard-coding it true would silently break every
+// local development login, and hard-coding it false would ship that breakage to
+// production instead.
+func (c Config) SecureCookies() bool {
+	return strings.HasPrefix(c.BaseURL, "https://")
 }
 
 // RedactedDatabaseURL is the connection string with its password replaced, so
@@ -79,6 +95,8 @@ func (c Config) RedactedDatabaseURL() string {
 func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("http_addr", c.HTTPAddr),
+		slog.String("base_url", c.BaseURL),
+		slog.Bool("secure_cookies", c.SecureCookies()),
 		slog.String("database_url", c.RedactedDatabaseURL()),
 		slog.Int("database_max_conns", int(c.DatabaseMaxConns)),
 		slog.String("log_level", c.LogLevel.String()),
@@ -171,6 +189,21 @@ func (l *loader) level(key string, def slog.Level) slog.Level {
 		return def
 	}
 	return lvl
+}
+
+// httpURL accepts an absolute http or https URL and returns it without a
+// trailing slash, so that callers can append a path without doubling it.
+func (l *loader) httpURL(key, def string) string {
+	v, ok := l.raw(key)
+	if !ok {
+		return def
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		l.fail(key, "%q is not an absolute http(s) URL such as https://restest.example.com", v)
+		return def
+	}
+	return strings.TrimRight(u.String(), "/")
 }
 
 func (l *loader) oneOf(key, def string, allowed ...string) string {

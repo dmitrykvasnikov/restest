@@ -27,6 +27,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" {
 		t.Errorf("HTTPAddr = %q, want :8080", cfg.HTTPAddr)
 	}
+	if cfg.BaseURL != "http://localhost:8080" {
+		t.Errorf("BaseURL = %q, want http://localhost:8080", cfg.BaseURL)
+	}
+	// Plain HTTP by default, so a Secure cookie would never come back and
+	// local development could not log in at all.
+	if cfg.SecureCookies() {
+		t.Error("SecureCookies is on for an http base URL")
+	}
 	if cfg.DatabaseMaxConns != 10 {
 		t.Errorf("DatabaseMaxConns = %d, want 10", cfg.DatabaseMaxConns)
 	}
@@ -43,8 +51,11 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadOverrides(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"RESTEST_DATABASE_URL":       "postgres://localhost/db",
-		"RESTEST_HTTP_ADDR":          "127.0.0.1:9000",
+		"RESTEST_DATABASE_URL": "postgres://localhost/db",
+		"RESTEST_HTTP_ADDR":    "127.0.0.1:9000",
+		// The trailing slash is dropped, so that callers can append a path
+		// without checking first.
+		"RESTEST_BASE_URL":           "https://restest.example.com/",
 		"RESTEST_DATABASE_MAX_CONNS": "42",
 		"RESTEST_LOG_LEVEL":          "debug",
 		"RESTEST_LOG_FORMAT":         "text",
@@ -56,6 +67,7 @@ func TestLoadOverrides(t *testing.T) {
 
 	want := Config{
 		HTTPAddr:         "127.0.0.1:9000",
+		BaseURL:          "https://restest.example.com",
 		DatabaseURL:      "postgres://localhost/db",
 		DatabaseMaxConns: 42,
 		LogLevel:         slog.LevelDebug,
@@ -64,6 +76,38 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg != want {
 		t.Errorf("Load = %+v, want %+v", cfg, want)
+	}
+}
+
+// Cookies follow the scheme users actually arrive on, which is the one thing
+// the process knows about how it is reached.
+func TestSecureCookiesFollowsBaseURL(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"RESTEST_DATABASE_URL": "postgres://localhost/db",
+		"RESTEST_BASE_URL":     "https://restest.example.com",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.SecureCookies() {
+		t.Error("SecureCookies is off for an https base URL")
+	}
+}
+
+func TestLoadRejectsBadBaseURL(t *testing.T) {
+	for _, bad := range []string{"restest.example.com", "ftp://restest.example.com", "https://", "://x"} {
+		t.Run(bad, func(t *testing.T) {
+			_, err := Load(env(map[string]string{
+				"RESTEST_DATABASE_URL": "postgres://localhost/db",
+				"RESTEST_BASE_URL":     bad,
+			}))
+			if err == nil {
+				t.Fatalf("Load accepted %q as a base URL", bad)
+			}
+			if !strings.Contains(err.Error(), "RESTEST_BASE_URL") {
+				t.Errorf("error %q does not name the variable", err)
+			}
+		})
 	}
 }
 

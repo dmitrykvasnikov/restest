@@ -13,9 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/dmitrykvasnikov/restest/internal/core"
 	"github.com/dmitrykvasnikov/restest/internal/database"
-	"github.com/dmitrykvasnikov/restest/internal/web"
 	"github.com/dmitrykvasnikov/restest/migrations"
 )
 
@@ -135,7 +133,8 @@ func TestServerIsReadyAgainstRealDatabase(t *testing.T) {
 	}
 	defer pool.Close()
 
-	handler := web.New(logger, core.NewStore(pool)).Handler()
+	_, srv := newApp(t, pool)
+	handler := srv.Handler()
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -165,7 +164,8 @@ func TestReadyzFailsAfterDatabaseIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	handler := web.New(logger, core.NewStore(pool)).Handler()
+	_, srv := newApp(t, pool)
+	handler := srv.Handler()
 
 	// Close the pool rather than the container: same observable state from the
 	// handler's point of view, and it does not race with test cleanup.

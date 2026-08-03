@@ -29,14 +29,20 @@ creates, renames or reconfigures remotes.
    Branch names: `feature/NN-short-slug`, where `NN` is the feature number from §4.
 2. The feature branch is **pushed to the remote** while work is in progress, so that work in
    flight is never only on one machine.
-3. When the feature is finished it goes through the **finish sequence** in §8.
+3. **When a milestone is finished, the finish sequence in §8 runs on its own** — commit, push,
+   merge into master, push master — without waiting to be asked. "Finished" means conditions
+   1–4 of §8 hold: the milestone's "done when" is demonstrably met, the tests pass, `DESIGN.md`
+   reflects any decision that changed, and the session note is written. A completed milestone
+   sitting in one working tree, unpushed and unmerged, is the one state this project should
+   never be left in.
 4. **Feature branches are kept** — never deleted, locally or on the remote. They are part of
    the project's record.
 
 Because branches are kept as history, merges use `--no-ff` so that each feature remains a
 visible, self-contained unit in the graph rather than being flattened away.
 
-Commits are made only when the owner asks for them.
+Commits *within* a milestone, while it is still in progress, are made when the owner asks for
+them. It is the completed milestone that commits itself.
 
 ## 3. Session notes
 
@@ -119,8 +125,8 @@ not a detail to be improvised during implementation.
 
 ### The finish sequence
 
-Once 1–4 hold and the owner says the feature is done, these five steps run in this order,
-without pausing between them:
+Once 1–4 hold, these five steps run in this order, without waiting to be asked and without
+pausing between them:
 
 1. **Commit** everything outstanding on the feature branch.
 2. **Push** the feature branch to the remote.

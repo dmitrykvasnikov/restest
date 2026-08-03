@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .Title }} · restest</title>
+  {{/* Inline so that the browser does not ask for a favicon it will not get. */}}
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#128225;</text></svg>">
+  <link rel="stylesheet" href="{{ .Asset "css/app.css" }}">
+  <script src="{{ .Asset "js/htmx.min.js" }}" defer></script>
+</head>
+
+{{/* Every HTMX request carries the CSRF token in a header, so a form driven by
+     HTMX needs no hidden field of its own. */}}
+<body class="flex min-h-full flex-col bg-slate-50 text-slate-900"
+      hx-headers='{"X-CSRF-Token": "{{ .CSRFToken }}"}'>
+
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex max-w-4xl items-center gap-6 px-4 py-3">
+      <a href="/" class="font-semibold tracking-tight text-slate-900">restest</a>
+
+      {{ if .User }}
+        <nav class="flex gap-4 text-sm">
+          <a href="/projects" class="text-slate-600 hover:text-slate-900">Projects</a>
+        </nav>
+        <div class="ml-auto flex items-center gap-3 text-sm">
+          <span class="hidden text-slate-500 sm:inline">{{ .User.Email }}</span>
+          <form method="post" action="/logout">
+            {{ template "csrf" . }}
+            <button type="submit" class="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline">
+              Log out
+            </button>
+          </form>
+        </div>
+      {{ else }}
+        <div class="ml-auto flex items-center gap-4 text-sm">
+          <a href="/login" class="text-slate-600 hover:text-slate-900">Log in</a>
+          <a href="/register" class="rounded-md bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-700">Register</a>
+        </div>
+      {{ end }}
+    </div>
+  </header>
+
+  <main class="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
+    {{ template "flashes" . }}
+    {{ template "content" . }}
+  </main>
+
+  <footer class="border-t border-slate-200 bg-white">
+    <div class="mx-auto max-w-4xl px-4 py-4 text-xs text-slate-500">
+      A mock REST API server. Mock traffic is served under
+      <code class="rounded bg-slate-100 px-1 py-0.5">{{ .BaseURL }}/m/{project}/</code>.
+    </div>
+  </footer>
+</body>
+</html>
