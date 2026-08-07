@@ -6,8 +6,8 @@ Written 2026-08-02, before any code.
 Milestones are sequenced so that each one ends at a state that can be demonstrated and, from
 M2 onward, is genuinely usable. Nothing here is a deadline; the ordering is the point.
 
-**Status (2026-08-07):** M0–M5 merged to master. M6 (API tokens and the management API) is
-next; see `notes/notes_06_1.md` § "Next step" for where to pick up.
+**Status (2026-08-07):** M0–M6 merged to master. M7 (hardening) is next; see
+`notes/notes_07_1.md` § "Next step" for where to pick up.
 
 ---
 
@@ -66,7 +66,8 @@ not after.
 **Done when:** `POST` a record, `GET` it back, filter for it, delete it, reset, and it is gone.
 
 **Known gap carried forward:** the reset route is session-authenticated and CSRF-guarded only —
-not yet scriptable without a browser session. M6 adds bearer-token auth at the same URL.
+not yet scriptable without a browser session. **Closed by M6**, which added bearer-token auth at
+the same URL, unchanged.
 
 ## M4 — Request log and inspector ✅ done (feature/05-request-log)
 
@@ -86,7 +87,7 @@ not yet scriptable without a browser session. M6 adds bearer-token auth at the s
 both configurable. See §7.1 there for the reasoning.
 
 **Carried forward:** the log has no search or filters, and is not reachable over `/api/v1/`. The
-second lands with M6, which routes the rest of the API anyway.
+second **landed with M6**, which routed the rest of the API anyway; the first is still open.
 
 ## M5 — Public datasets ✅ done (feature/06-datasets)
 
@@ -108,16 +109,28 @@ restored to its seeds every hour. See §6.1 there for the reasoning.
 existing project means creating a collection by hand. The demo has no page of its own — it is
 offered on the login page and reached with `curl`.
 
-## M6 — API tokens and management API ⬅ next up (feature 07, not started)
+## M6 — API tokens and management API ✅ done (feature/07-api-tokens)
 
-- [ ] Token CRUD; plaintext shown once, SHA-256 stored, prefix retained for identification.
-- [ ] `Authorization: Bearer` middleware, updating `last_used_at`.
-- [ ] `/api/v1/` covering projects, endpoints, collections and reset, so a CI job can configure
-      mocks without the UI.
+- [x] Token CRUD; plaintext shown once, SHA-256 stored, prefix retained for identification.
+      Optional expiry, revocation immediate. Minted in the interface only.
+- [x] `Authorization: Bearer` middleware, updating `last_used_at` in the statement that
+      authenticates — so an expired or revoked token is refused and not marked used.
+- [x] `/api/v1/` covering projects, endpoints, collections and reset, so a CI job can configure
+      mocks without the UI. The request log came with it, read-only, closing M4's gap.
+- [x] A bearer-authenticated request is exempt from CSRF, and **never falls back to the
+      session** — which is what makes that exemption sound rather than convenient.
 
 **Done when:** a shell script can create a project, define endpoints and reset state.
 
-## M7 — Hardening (not started)
+**Decisions that closed `DESIGN.md` §5.1:** see §8.1 there — the no-fallback rule behind the
+CSRF exemption, hashing without a KDF, expiry enforced in SQL, and why no route mints a token.
+
+**Carried forward:** tokens are account-wide — there is no per-project scope and no read-only
+token, so a token is exactly as powerful as the account that made it. The log is still without
+search or filters, over the API as in the browser. There is no rate limiting on `/api/v1/`;
+that is M7's.
+
+## M7 — Hardening ⬅ next up (feature 08, not started)
 
 - [ ] Per-IP and per-project rate limiting on mock traffic; request body size caps; server
       read/write timeouts.

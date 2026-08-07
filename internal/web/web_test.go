@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"html"
 	"io"
@@ -63,6 +64,11 @@ type stubStore struct {
 	// test can send a request and then go and look for it.
 	exchanges *fakeLog
 
+	// tokens is the same idea again for API tokens: a test mints one through
+	// the page and then presents it to /api/v1/, which is the sequence the
+	// milestone is about.
+	tokens *fakeTokens
+
 	// mockData is what the route table is rebuilt from. It doubles as
 	// mock.Source, so a test that changes an endpoint through the UI can then
 	// ask the mock server for it.
@@ -95,6 +101,33 @@ func (s stubStore) UserByID(ctx context.Context, id uuid.UUID) (core.User, error
 		return core.User{}, core.ErrNotFound
 	}
 	return s.userByID(ctx, id)
+}
+
+func (s stubStore) CreateAPIToken(_ context.Context, userID uuid.UUID, in core.APITokenInput) (core.APIToken, string, error) {
+	return s.apiTokens().create(userID, in)
+}
+
+func (s stubStore) APITokensByUser(_ context.Context, userID uuid.UUID) ([]core.APIToken, error) {
+	return s.apiTokens().byUser(userID), nil
+}
+
+func (s stubStore) DeleteAPIToken(_ context.Context, userID, id uuid.UUID) error {
+	return s.apiTokens().remove(userID, id)
+}
+
+// AuthenticateAPIToken hands back testUser, because the stub has one account
+// and a token belongs to whoever minted it.
+func (s stubStore) AuthenticateAPIToken(_ context.Context, presented string) (core.User, core.APIToken, error) {
+	return s.apiTokens().authenticate(presented, testUser)
+}
+
+// apiTokens is the stub's token store, or an empty one for a test that never
+// minted anything and should see every token refused rather than a panic.
+func (s stubStore) apiTokens() *fakeTokens {
+	if s.tokens == nil {
+		return newFakeTokens()
+	}
+	return s.tokens
 }
 
 func (s stubStore) CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string, datasets []string) (core.Project, error) {
@@ -433,6 +466,32 @@ func (b *browser) sameOriginHeaders(formPath string) http.Header {
 	}
 }
 
+// raw sends an arbitrary request through the browser's own client — cookie jar
+// and all — for the tests that are about what a logged-in browser can be made
+// to do.
+func (b *browser) raw(method, path string, headers http.Header, body string) (*http.Response, string) {
+	b.t.Helper()
+
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequest(method, b.url+path, reader)
+	if err != nil {
+		b.t.Fatalf("build %s %s: %v", method, path, err)
+	}
+	for k, v := range headers {
+		req.Header[k] = v
+	}
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		b.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return resp, readBody(b.t, resp)
+}
+
 // postRaw submits without fetching a token, for tests about what happens when
 // the token is missing or wrong.
 func (b *browser) postRaw(action string, values url.Values, headers http.Header) (*http.Response, string) {
@@ -452,6 +511,70 @@ func (b *browser) postRaw(action string, values url.Values, headers http.Header)
 		b.t.Fatalf("POST %s: %v", action, err)
 	}
 	return resp, readBody(b.t, resp)
+}
+
+// script is what a CI job is: a client with a token, no cookie jar and no CSRF
+// token. Everything it can do, it does with the Authorization header alone —
+// which is the point of the milestone, and a jar would hide a failure to
+// deliver it.
+type script struct {
+	t      *testing.T
+	client *http.Client
+	url    string
+	token  string
+}
+
+// script returns a cookie-less client against the same server, holding token.
+// An empty token stands for a caller that presents nothing.
+func (b *browser) script(token string) *script {
+	b.t.Helper()
+
+	// The transport, not the client: it carries the test server's certificate
+	// when there is one, and leaves the cookie jar behind.
+	return &script{
+		t:      b.t,
+		client: &http.Client{Transport: b.client.Transport},
+		url:    b.url,
+		token:  token,
+	}
+}
+
+// do sends one JSON request. An empty body sends none, which is what a GET or a
+// DELETE wants.
+func (s *script) do(method, path, body string) (*http.Response, string) {
+	s.t.Helper()
+
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequest(method, s.url+path, reader)
+	if err != nil {
+		s.t.Fatalf("build %s %s: %v", method, path, err)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if s.token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.token)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		s.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return resp, readBody(s.t, resp)
+}
+
+func (s *script) get(path string) (*http.Response, string) { return s.do(http.MethodGet, path, "") }
+
+// decodeJSON reads a response body into v, failing the test if it is not JSON.
+func decodeJSONBody(t *testing.T, body string, v any) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(body), v); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
 }
 
 func readBody(t *testing.T, resp *http.Response) string {

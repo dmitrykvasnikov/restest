@@ -233,9 +233,10 @@ func TestResetWithoutAnAccount(t *testing.T) {
 	resp, body := b.postRaw("/api/v1/projects/checkout/collections/users/reset",
 		url.Values{}, b.sameOriginHeaders("/projects/checkout"))
 
-	// No CSRF token was fetched, so the guard answers first — which is itself
-	// the point being recorded: this route is not scriptable until M6 gives it
-	// bearer tokens, and it fails closed rather than open.
+	// No CSRF token was fetched and no bearer token was sent, so the request is
+	// refused — by the guard or by the authentication, whichever answers first.
+	// A caller with neither credential fails closed, which is what M6 did not
+	// change when it made this route scriptable with a token.
 	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want the request refused:\n%s", resp.StatusCode, body)
 	}

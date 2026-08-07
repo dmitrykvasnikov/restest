@@ -30,10 +30,17 @@ const (
 // Session keys. Only the user id is kept: everything else about the account is
 // read from the database on the request that needs it, so a change of address
 // or a deleted account takes effect immediately rather than at the next login.
+// The one exception is a token's plaintext, which crosses the redirect from
+// "create" to "here it is" in the session — server-side, in Postgres, and
+// popped by the page that shows it — because the alternatives are a URL that
+// lands in a proxy log and a page that cannot be reloaded.
 const (
 	sessionKeyUserID     = "user_id"
 	sessionKeyFlashes    = "flashes"
 	sessionKeyAfterLogin = "after_login"
+
+	sessionKeyNewToken     = "new_token"
+	sessionKeyNewTokenName = "new_token_name"
 )
 
 // NewSessionManager builds the session manager over the sessions table the
