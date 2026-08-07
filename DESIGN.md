@@ -224,6 +224,48 @@ client actually sent is usually the reason someone reaches for a mock server.
 Bodies are truncated above a size cap. Retention is time-based, implemented with monthly
 table partitions so that expiry is a partition detach rather than a long-running `DELETE`.
 
+### 7.1 What M4 decided
+
+**Recording is a middleware around the mock handler alone**, not around the application. The
+UI's own traffic is somebody administering their mocks, not a client under test; recording it
+would fill the inspector with the inspector. A request addressed to a slug no project has is
+not recorded either — there is no project whose log it would belong to, and the 404 already
+said so.
+
+**The write never happens on the request path.** `Record` hands the exchange to a buffered
+channel and returns; one goroutine drains it in batches and writes them with `COPY`. **A full
+buffer drops and says so** — it does not block, because blocking would put the database back
+in the request path at exactly the moment the database is the problem, and it does not discard
+quietly, because a log that silently loses entries invites conclusions drawn from evidence
+that is not there. Drops are counted, warned about in the process log at most every ten
+seconds, and shown on the inspector page. Failed writes are counted separately from dropped
+ones: the first is the database refusing, the second is this process falling behind.
+
+**Credentials are redacted on the way in, not on the way out.** `Authorization`,
+`Proxy-Authorization`, `Cookie` and `Set-Cookie` reach the table with their values already
+replaced, keeping only the scheme — `Bearer [redacted]`. Redacting at display would mean the
+credential is in the database and one careless query away; redacting at capture means nothing
+that reaches the table can be un-redacted later. "Was the client sending an `Authorization`
+header at all, and of what kind" is the question an inspector is actually asked, and the
+scheme answers it.
+
+**The live tail polls the database rather than being fed by the recorder in process.** It
+costs one small indexed query per second per open inspector and buys two things worth more
+than that: a second instance's traffic appears in the tail as readily as this one's, and what
+is streamed is what was stored rather than what was hoped to be. Rows are rendered server-side
+from the same template the page uses, so a row that arrives live and one that arrives on a
+refresh cannot drift apart. Paging back through the log uses a `(created_at, id)` cursor, not
+an offset, so a log being written to while it is read still returns each exchange exactly once.
+
+**Retention runs daily, not monthly.** A process restarted often would otherwise be the only
+thing that ever ran it, and one never restarted would run it once. Each run creates the next
+three months' partitions and detaches-then-drops, in one transaction and under a five-second
+`lock_timeout`, any month outside the window. Creating partitions ahead of the traffic is the
+point: a month with no partition still accepts writes — they land in the default partition, so
+logging can never be why a mock request fails — but rows sitting in the default cannot be
+expired by detaching, and their presence is what makes creating that month's partition later
+fail.
+
 ## 8. Authentication
 
 **Web UI — server-side sessions.** Cookie holding an opaque id, session state in Postgres
@@ -395,7 +437,16 @@ Genuinely undecided; none block starting work.
    still additive.
 2. **Demo project reset policy** — how often, and whether anonymous writes are persisted at
    all or only echoed.
-3. **Log retention window** and body size cap.
+3. ~~**Log retention window** and body size cap.~~ **Settled by M4.** Retention is **three
+   months** counting the current one — long enough to answer "what did that client send last
+   week", short enough that a mock server does not quietly become an archive — and the body cap
+   is **64 KiB** per body, which covers the JSON payloads a REST client actually sends while
+   bounding what a month of traffic costs. Both are configurable
+   (`RESTEST_LOG_RETENTION_MONTHS`, `RESTEST_LOG_BODY_LIMIT`), the cap is bounded above by the
+   1 MiB ceiling on mock request bodies, and retention refuses to drop the month being written
+   into. The cap is a decision about what is worth keeping, not about what is safe to accept:
+   a body above it is stored truncated and **marked as truncated**, so the inspector never
+   implies it is showing the whole thing.
 4. **Anonymous throwaway projects** — whether a visitor can create a temporary project
    without registering.
 5. **Deployment model** — self-hosted single instance vs public service. Still open; the

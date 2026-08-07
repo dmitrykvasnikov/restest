@@ -58,6 +58,11 @@ type stubStore struct {
 	// that was posted — and canned answers cannot fail that.
 	documents *fakeDocuments
 
+	// exchanges is the same idea for the request log: one little store that is
+	// both what the recorder writes to and what the inspector reads from, so a
+	// test can send a request and then go and look for it.
+	exchanges *fakeLog
+
 	// mockData is what the route table is rebuilt from. It doubles as
 	// mock.Source, so a test that changes an endpoint through the UI can then
 	// ask the mock server for it.
@@ -242,6 +247,31 @@ func (s stubStore) docs() *fakeDocuments {
 		return newFakeDocuments()
 	}
 	return s.documents
+}
+
+func (s stubStore) ExchangesByProject(_ context.Context, projectID uuid.UUID, before core.ExchangeCursor, limit int) ([]core.Exchange, error) {
+	return s.log().byProject(projectID, before, limit)
+}
+
+func (s stubStore) ExchangesSince(_ context.Context, projectID uuid.UUID, after core.ExchangeCursor, limit int) ([]core.Exchange, error) {
+	return s.log().since(projectID, after, limit)
+}
+
+func (s stubStore) ExchangeByID(_ context.Context, projectID, id uuid.UUID) (core.Exchange, error) {
+	return s.log().byID(projectID, id)
+}
+
+func (s stubStore) LatestExchangeCursor(_ context.Context, projectID uuid.UUID) (core.ExchangeCursor, error) {
+	return s.log().latest(projectID)
+}
+
+// log is the stub's request log, or an empty one for a test whose project has
+// simply never been asked for anything.
+func (s stubStore) log() *fakeLog {
+	if s.exchanges == nil {
+		return newFakeLog()
+	}
+	return s.exchanges
 }
 
 // MockData makes the stub usable as a mock.Source as well as a Store, so one

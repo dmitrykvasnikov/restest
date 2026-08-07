@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -81,12 +82,28 @@ func newApp(t *testing.T, pool *pgxpool.Pool) (*core.Store, *web.Server) {
 		t.Fatalf("load route table: %v", err)
 	}
 
+	// The request log, wired the way main.go wires it: a recorder draining into
+	// this store. Its flush interval is short so that a test which sends a
+	// request and then looks for it in the database is waiting on milliseconds
+	// rather than on the quarter second a deployment batches over.
+	recorderCtx, stopRecorder := context.WithCancel(context.WithoutCancel(t.Context()))
+	recorder := core.NewRecorder(store, testLogger(), core.RecorderOptions{
+		Flush: 25 * time.Millisecond,
+	})
+	go recorder.Run(recorderCtx)
+	t.Cleanup(func() {
+		stopRecorder()
+		recorder.Wait()
+	})
+
 	srv, err := web.New(web.Options{
-		Logger:   testLogger(),
-		Store:    store,
-		Sessions: sessions,
-		Routes:   matcher,
-		BaseURL:  "http://restest.test",
+		Logger:             testLogger(),
+		Store:              store,
+		Sessions:           sessions,
+		Routes:             matcher,
+		BaseURL:            "http://restest.test",
+		Recorder:           recorder,
+		LogRetentionMonths: core.DefaultRetentionMonths,
 	})
 	if err != nil {
 		t.Fatalf("build web server: %v", err)

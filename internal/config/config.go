@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dmitrykvasnikov/restest/internal/core"
 )
 
 // Prefix is prepended to every environment variable name.
@@ -40,6 +42,18 @@ type Config struct {
 	// ShutdownTimeout bounds how long a graceful shutdown waits for in-flight
 	// requests before the process exits anyway.
 	ShutdownTimeout time.Duration
+
+	// LogBodyLimit is how much of a request or response body the request log
+	// keeps, in bytes. Bodies above it are stored truncated and marked as such,
+	// so the inspector never implies it is showing the whole thing.
+	LogBodyLimit int
+	// LogBuffer is how many recorded exchanges may wait to be written. Beyond
+	// it they are dropped and counted rather than made to wait, because a
+	// request should never be slowed down by the log of it.
+	LogBuffer int
+	// LogRetentionMonths is how many months of request log are kept, counting
+	// the current one. Expiry is a partition detached and dropped.
+	LogRetentionMonths int
 }
 
 // LookupFunc reads one environment variable. It has the signature of
@@ -60,6 +74,15 @@ func Load(lookup LookupFunc) (Config, error) {
 		LogLevel:         l.level("LOG_LEVEL", slog.LevelInfo),
 		LogFormat:        l.oneOf("LOG_FORMAT", "json", "json", "text"),
 		ShutdownTimeout:  l.duration("SHUTDOWN_TIMEOUT", 15*time.Second),
+
+		// The request log. The body limit is a decision about what is worth
+		// keeping rather than what is safe to accept: mock request bodies are
+		// capped at 1 MiB on the way in, and 64 KiB of that covers the JSON
+		// payloads a REST client actually sends while bounding what a month of
+		// traffic costs. A body above it is stored truncated and marked.
+		LogBodyLimit:       l.intVal("LOG_BODY_LIMIT", 64*1024, 0, core.MaxExchangeBody),
+		LogBuffer:          l.intVal("LOG_BUFFER", core.DefaultRecorderBuffer, 1, 1_000_000),
+		LogRetentionMonths: l.intVal("LOG_RETENTION_MONTHS", core.DefaultRetentionMonths, core.MinRetentionMonths, 120),
 	}
 	if err := l.err(); err != nil {
 		return Config{}, err
@@ -102,6 +125,9 @@ func (c Config) LogValue() slog.Value {
 		slog.String("log_level", c.LogLevel.String()),
 		slog.String("log_format", c.LogFormat),
 		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
+		slog.Int("log_body_limit", c.LogBodyLimit),
+		slog.Int("log_buffer", c.LogBuffer),
+		slog.Int("log_retention_months", c.LogRetentionMonths),
 	)
 }
 

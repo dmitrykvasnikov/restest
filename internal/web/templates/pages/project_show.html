@@ -6,6 +6,10 @@
     <p class="mt-1 text-sm text-slate-500">Created {{ .CreatedAt.Format "2 January 2006" }}</p>
   </div>
   <div class="flex items-center gap-3">
+    <a href="/projects/{{ .Slug }}/log"
+       class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      Request log
+    </a>
     <a href="/projects/{{ .Slug }}/edit"
        class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
       Edit
@@ -27,6 +31,8 @@
   <p class="mt-2 font-mono text-sm break-all text-slate-900">{{ $.BaseURL }}{{ .MockPath }}</p>
   <p class="mt-2 text-xs text-slate-500">
     Everything you define for this project answers under this prefix, and needs no credentials.
+    Every request to it is recorded — open the <a href="/projects/{{ .Slug }}/log"
+    class="underline underline-offset-2">request log</a> to watch them arrive.
   </p>
 </div>
 {{ end }}

@@ -48,6 +48,11 @@ services:
       RESTEST_BASE_URL: ${RESTEST_BASE_URL:-http://localhost:8080}
       RESTEST_LOG_LEVEL: ${RESTEST_LOG_LEVEL:-info}
       RESTEST_LOG_FORMAT: ${RESTEST_LOG_FORMAT:-json}
+      # The request log. Defaults are the application's own; passed through so
+      # that an instance keeping more or less of it does not need a rebuild.
+      RESTEST_LOG_BODY_LIMIT: ${RESTEST_LOG_BODY_LIMIT:-65536}
+      RESTEST_LOG_BUFFER: ${RESTEST_LOG_BUFFER:-1000}
+      RESTEST_LOG_RETENTION_MONTHS: ${RESTEST_LOG_RETENTION_MONTHS:-3}
     ports:
       # Loopback by default: until M1 there is no authentication at all, and
       # even after it there is no reason to put a development instance on the

@@ -26,14 +26,23 @@ import (
 )
 
 // Timeouts on the HTTP server itself, guarding against a client that opens a
-// connection and then dawdles. M7 revisits these; the streaming log tail in M4
-// will need WriteTimeout relaxed for its route.
+// connection and then dawdles. M7 revisits these.
+//
+// WriteTimeout stays where it is now that the log tail streams: that one
+// response lifts its own write deadline through http.ResponseController, which
+// is the same trick a delayed mock endpoint uses, and is better than weakening
+// the guard on every route to accommodate two.
 const (
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 30 * time.Second
 	writeTimeout      = 30 * time.Second
 	idleTimeout       = 120 * time.Second
 )
+
+// logMaintenanceInterval is how often partitions are created and expired ones
+// dropped. Daily rather than monthly: a process restarted often would otherwise
+// be the only thing that ever ran it, and one never restarted would run it once.
+const logMaintenanceInterval = 24 * time.Hour
 
 func main() {
 	if err := run(context.Background()); err != nil {
@@ -89,12 +98,32 @@ func run(ctx context.Context) error {
 	}
 	go matcher.Refresh(ctx, mock.RefreshInterval)
 
+	// The request log. The recorder is started before the listener opens so
+	// that no request can arrive to find a queue nobody is draining, and it is
+	// stopped after the server has shut down, so the last requests served are
+	// still written. Its context is separate from the one the signal cancels,
+	// for exactly that reason.
+	recorderCtx, stopRecorder := context.WithCancel(context.Background())
+	defer stopRecorder()
+
+	recorder := core.NewRecorder(store, logger, core.RecorderOptions{Buffer: cfg.LogBuffer})
+	go recorder.Run(recorderCtx)
+
+	// Partition maintenance: next months created, expired ones detached and
+	// dropped. It runs once at startup and then daily, and a failure is logged
+	// rather than fatal — the default partition means writes keep working
+	// either way.
+	go store.MaintainExchangeLogLoop(ctx, logMaintenanceInterval, cfg.LogRetentionMonths, logger)
+
 	app, err := web.New(web.Options{
-		Logger:   logger,
-		Store:    store,
-		Sessions: sessions,
-		Routes:   matcher,
-		BaseURL:  cfg.BaseURL,
+		Logger:             logger,
+		Store:              store,
+		Sessions:           sessions,
+		Routes:             matcher,
+		BaseURL:            cfg.BaseURL,
+		Recorder:           recorder,
+		LogBodyLimit:       cfg.LogBodyLimit,
+		LogRetentionMonths: cfg.LogRetentionMonths,
 	})
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
@@ -136,11 +165,21 @@ func run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
 		// Requests still running when the deadline passed. Drop them rather
 		// than hang: the process was asked to leave.
 		_ = srv.Close()
-		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+
+	// After the server, before the pool: the exchanges queued by the requests
+	// that just finished are written by a goroutine that needs the pool to
+	// still be open, and `defer pool.Close()` runs after this function returns.
+	stopRecorder()
+	recorder.Wait()
+
+	if shutdownErr != nil {
+		return fmt.Errorf("graceful shutdown: %w", shutdownErr)
 	}
 
 	logger.Info("stopped")
