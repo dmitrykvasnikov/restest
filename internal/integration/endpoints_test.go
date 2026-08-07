@@ -25,7 +25,7 @@ func newStoreWithProject(t *testing.T) (*core.Store, core.User, core.Project) {
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
-	project, err := store.CreateProject(t.Context(), user.ID, "checkout", "Checkout API")
+	project, err := store.CreateProject(t.Context(), user.ID, "checkout", "Checkout API", nil)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}

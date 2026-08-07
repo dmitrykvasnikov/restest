@@ -54,7 +54,24 @@ type Config struct {
 	// LogRetentionMonths is how many months of request log are kept, counting
 	// the current one. Expiry is a partition detached and dropped.
 	LogRetentionMonths int
+
+	// DemoEnabled provisions the shared demo project at startup and resets it on
+	// a schedule. Off, nothing is created and the login page stops offering it;
+	// a demo already in the database is left alone rather than deleted.
+	DemoEnabled bool
+	// DemoResetInterval is how often the demo project is restored to its seeds,
+	// so that one visitor's writes cannot spoil it for the next.
+	DemoResetInterval time.Duration
 }
+
+// Bounds on the demo reset interval. The floor is not about correctness — a
+// reset is one transaction per collection — but about what the setting means: a
+// demo reset every few seconds is a demo that discards a visitor's POST before
+// they can GET it back, which is the one thing the demo is there to show.
+const (
+	minDemoResetInterval = time.Minute
+	maxDemoResetInterval = 7 * 24 * time.Hour
+)
 
 // LookupFunc reads one environment variable. It has the signature of
 // os.LookupEnv so that tests can supply a fake environment.
@@ -83,6 +100,13 @@ func Load(lookup LookupFunc) (Config, error) {
 		LogBodyLimit:       l.intVal("LOG_BODY_LIMIT", 64*1024, 0, core.MaxExchangeBody),
 		LogBuffer:          l.intVal("LOG_BUFFER", core.DefaultRecorderBuffer, 1, 1_000_000),
 		LogRetentionMonths: l.intVal("LOG_RETENTION_MONTHS", core.DefaultRetentionMonths, core.MinRetentionMonths, 120),
+
+		// The demo project. On by default: an instance that serves the demo to
+		// anyone who arrives is the point of it, and the way to have a private
+		// instance is to say so rather than to be given one by accident.
+		DemoEnabled: l.boolean("DEMO_ENABLED", true),
+		DemoResetInterval: l.durationRange("DEMO_RESET_INTERVAL", time.Hour,
+			minDemoResetInterval, maxDemoResetInterval),
 	}
 	if err := l.err(); err != nil {
 		return Config{}, err
@@ -128,6 +152,8 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("log_body_limit", c.LogBodyLimit),
 		slog.Int("log_buffer", c.LogBuffer),
 		slog.Int("log_retention_months", c.LogRetentionMonths),
+		slog.Bool("demo_enabled", c.DemoEnabled),
+		slog.Duration("demo_reset_interval", c.DemoResetInterval),
 	)
 }
 
@@ -202,6 +228,33 @@ func (l *loader) duration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// durationRange is duration with bounds, for a setting where both a value too
+// small and a value too large are mistakes worth naming rather than accepting.
+func (l *loader) durationRange(key string, def, min, max time.Duration) time.Duration {
+	d := l.duration(key, def)
+	if d < min || d > max {
+		l.fail(key, "%s is out of range [%s, %s]", d, min, max)
+		return def
+	}
+	return d
+}
+
+// boolean accepts what strconv.ParseBool does — true/false, 1/0, t/f, and the
+// capitalised forms — because those are what a compose file and a shell both
+// end up producing.
+func (l *loader) boolean(key string, def bool) bool {
+	v, ok := l.raw(key)
+	if !ok {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		l.fail(key, "%q is not true or false", v)
+		return def
+	}
+	return b
 }
 
 func (l *loader) level(key string, def slog.Level) slog.Level {

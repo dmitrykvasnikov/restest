@@ -143,7 +143,7 @@ func TestProjectLifecycle(t *testing.T) {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 
-	project, err := store.CreateProject(t.Context(), owner.ID, " Checkout ", "  Checkout API  ")
+	project, err := store.CreateProject(t.Context(), owner.ID, " Checkout ", "  Checkout API  ", nil)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -205,11 +205,11 @@ func TestSlugsAreGlobal(t *testing.T) {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 
-	if _, err := store.CreateProject(t.Context(), first.ID, "checkout", "Checkout"); err != nil {
+	if _, err := store.CreateProject(t.Context(), first.ID, "checkout", "Checkout", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
-	_, err = store.CreateProject(t.Context(), second.ID, "checkout", "Also checkout")
+	_, err = store.CreateProject(t.Context(), second.ID, "checkout", "Also checkout", nil)
 	if !errors.Is(err, core.ErrSlugTaken) {
 		t.Errorf("error = %v, want ErrSlugTaken", err)
 	}
@@ -230,7 +230,7 @@ func TestAnotherOwnersProjectIsNotFound(t *testing.T) {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 
-	project, err := store.CreateProject(t.Context(), owner.ID, "checkout", "Checkout")
+	project, err := store.CreateProject(t.Context(), owner.ID, "checkout", "Checkout", nil)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestSchemaConstraintsMatchTheGoRules(t *testing.T) {
 			}
 
 			// ...and so does the store, before it ever gets there.
-			if _, err := store.CreateProject(t.Context(), owner.ID, slug, "Through the store"); err == nil {
+			if _, err := store.CreateProject(t.Context(), owner.ID, slug, "Through the store", nil); err == nil {
 				t.Errorf("CreateProject accepted slug %q", slug)
 			}
 		})
@@ -286,14 +286,14 @@ func TestSchemaConstraintsMatchTheGoRules(t *testing.T) {
 	// takes, so the two are not merely both strict but strict about the same
 	// thing.
 	longest := strings.Repeat("a", 40)
-	if _, err := store.CreateProject(t.Context(), owner.ID, longest, "Longest allowed"); err != nil {
+	if _, err := store.CreateProject(t.Context(), owner.ID, longest, "Longest allowed", nil); err != nil {
 		t.Errorf("a 40-character slug was rejected: %v", err)
 	}
 
 	// Case and surrounding whitespace are normalised rather than rejected: the
 	// constraint applies to what is stored, and what a user types with the
 	// shift key held down still means the slug they meant.
-	project, err := store.CreateProject(t.Context(), owner.ID, "  MyAPI ", "Mixed case")
+	project, err := store.CreateProject(t.Context(), owner.ID, "  MyAPI ", "Mixed case", nil)
 	if err != nil {
 		t.Fatalf("CreateProject with a mixed-case slug: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestDeletingAUserCascadesToProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
-	if _, err := store.CreateProject(t.Context(), owner.ID, "checkout", "Checkout"); err != nil {
+	if _, err := store.CreateProject(t.Context(), owner.ID, "checkout", "Checkout", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 

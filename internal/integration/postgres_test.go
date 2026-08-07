@@ -68,6 +68,13 @@ func migratedPool(t *testing.T, dsn string) *pgxpool.Pool {
 // tests drive is the real assembly rather than a convenient approximation.
 func newApp(t *testing.T, pool *pgxpool.Pool) (*core.Store, *web.Server) {
 	t.Helper()
+	return newAppWith(t, pool, nil)
+}
+
+// newAppWith is newApp with the options a test needs to differ on — whether
+// this instance serves the demo project, so far.
+func newAppWith(t *testing.T, pool *pgxpool.Pool, tweak func(*web.Options)) (*core.Store, *web.Server) {
+	t.Helper()
 
 	sessions, stopCleanup := web.NewSessionManager(pool, false)
 	t.Cleanup(stopCleanup)
@@ -96,7 +103,7 @@ func newApp(t *testing.T, pool *pgxpool.Pool) (*core.Store, *web.Server) {
 		recorder.Wait()
 	})
 
-	srv, err := web.New(web.Options{
+	opts := web.Options{
 		Logger:             testLogger(),
 		Store:              store,
 		Sessions:           sessions,
@@ -104,7 +111,12 @@ func newApp(t *testing.T, pool *pgxpool.Pool) (*core.Store, *web.Server) {
 		BaseURL:            "http://restest.test",
 		Recorder:           recorder,
 		LogRetentionMonths: core.DefaultRetentionMonths,
-	})
+	}
+	if tweak != nil {
+		tweak(&opts)
+	}
+
+	srv, err := web.New(opts)
 	if err != nil {
 		t.Fatalf("build web server: %v", err)
 	}

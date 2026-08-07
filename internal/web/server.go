@@ -38,7 +38,7 @@ type Store interface {
 	Authenticate(ctx context.Context, email, password string) (core.User, error)
 	UserByID(ctx context.Context, id uuid.UUID) (core.User, error)
 
-	CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string) (core.Project, error)
+	CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string, datasets []string) (core.Project, error)
 	ProjectsByOwner(ctx context.Context, ownerID uuid.UUID) ([]core.Project, error)
 	ProjectByOwnerAndSlug(ctx context.Context, ownerID uuid.UUID, slug string) (core.Project, error)
 	UpdateProject(ctx context.Context, ownerID, id uuid.UUID, slug, name string) (core.Project, error)
@@ -108,6 +108,11 @@ type Options struct {
 	// the page, because "where did last quarter go" is a question worth
 	// answering before it is asked.
 	LogRetentionMonths int
+	// DemoEnabled says whether this instance serves the shared demo project. It
+	// changes nothing about routing — the demo is an ordinary project and the
+	// matcher treats it as one — only whether the pages an anonymous visitor
+	// sees offer it.
+	DemoEnabled bool
 }
 
 // Server carries the dependencies shared by all handlers.
@@ -125,6 +130,7 @@ type Server struct {
 	logBodyLimit int
 
 	logRetentionMonths int
+	demoEnabled        bool
 }
 
 // defaultLogBodyLimit is how much of a body is recorded when the caller did not
@@ -167,6 +173,7 @@ func New(opts Options) (*Server, error) {
 		logBodyLimit: limit,
 
 		logRetentionMonths: opts.LogRetentionMonths,
+		demoEnabled:        opts.DemoEnabled,
 	}
 	s.routes()
 	return s, nil

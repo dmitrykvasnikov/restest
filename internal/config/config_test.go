@@ -58,6 +58,47 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogRetentionMonths != core.DefaultRetentionMonths {
 		t.Errorf("LogRetentionMonths = %d, want %d", cfg.LogRetentionMonths, core.DefaultRetentionMonths)
 	}
+	// The demo is on unless an instance says otherwise: serving it to whoever
+	// arrives is the point of having it.
+	if !cfg.DemoEnabled {
+		t.Error("DemoEnabled is off by default")
+	}
+	if cfg.DemoResetInterval != time.Hour {
+		t.Errorf("DemoResetInterval = %v, want 1h", cfg.DemoResetInterval)
+	}
+}
+
+// The reset interval has a floor because of what the setting means rather than
+// what it costs: a demo reset every second discards a visitor's POST before
+// they can GET it back, which is the one thing the demo exists to show.
+func TestLoadRejectsAnAbsurdDemoResetInterval(t *testing.T) {
+	for _, bad := range []string{"1s", "30s", "1000h", "0s", "-1m", "soon"} {
+		t.Run(bad, func(t *testing.T) {
+			_, err := Load(env(map[string]string{
+				"RESTEST_DATABASE_URL":        "postgres://localhost/db",
+				"RESTEST_DEMO_RESET_INTERVAL": bad,
+			}))
+			if err == nil {
+				t.Fatalf("Load accepted %q as the demo reset interval", bad)
+			}
+			if !strings.Contains(err.Error(), "RESTEST_DEMO_RESET_INTERVAL") {
+				t.Errorf("error %q does not name the variable", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsANonBooleanDemoFlag(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"RESTEST_DATABASE_URL": "postgres://localhost/db",
+		"RESTEST_DEMO_ENABLED": "yes please",
+	}))
+	if err == nil {
+		t.Fatal("Load accepted a non-boolean RESTEST_DEMO_ENABLED")
+	}
+	if !strings.Contains(err.Error(), "RESTEST_DEMO_ENABLED") {
+		t.Errorf("error %q does not name the variable", err)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -76,6 +117,9 @@ func TestLoadOverrides(t *testing.T) {
 		"RESTEST_LOG_BODY_LIMIT":       "4096",
 		"RESTEST_LOG_BUFFER":           "64",
 		"RESTEST_LOG_RETENTION_MONTHS": "12",
+		// The demo project: an instance that does not want to serve one says so.
+		"RESTEST_DEMO_ENABLED":        "false",
+		"RESTEST_DEMO_RESET_INTERVAL": "15m",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -92,6 +136,8 @@ func TestLoadOverrides(t *testing.T) {
 		LogBodyLimit:       4096,
 		LogBuffer:          64,
 		LogRetentionMonths: 12,
+		DemoEnabled:        false,
+		DemoResetInterval:  15 * time.Minute,
 	}
 	if cfg != want {
 		t.Errorf("Load = %+v, want %+v", cfg, want)

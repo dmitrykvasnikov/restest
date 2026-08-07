@@ -56,7 +56,7 @@ func TestProjectCreate(t *testing.T) {
 	var gotOwner uuid.UUID
 
 	store := projectStore()
-	store.createProject = func(_ context.Context, owner uuid.UUID, slug, name string) (core.Project, error) {
+	store.createProject = func(_ context.Context, owner uuid.UUID, slug, name string, _ []string) (core.Project, error) {
 		gotOwner, gotSlug, gotName = owner, slug, name
 		return testProject(slug, name), nil
 	}
@@ -89,7 +89,7 @@ func TestProjectCreate(t *testing.T) {
 
 func TestProjectCreateRejectsAnInvalidSlug(t *testing.T) {
 	store := projectStore()
-	store.createProject = func(context.Context, uuid.UUID, string, string) (core.Project, error) {
+	store.createProject = func(context.Context, uuid.UUID, string, string, []string) (core.Project, error) {
 		return core.Project{}, core.FieldErrors{"slug": "That slug is reserved. Pick another one."}
 	}
 
@@ -115,7 +115,7 @@ func TestProjectCreateRejectsAnInvalidSlug(t *testing.T) {
 
 func TestProjectCreateReportsATakenSlug(t *testing.T) {
 	store := projectStore()
-	store.createProject = func(context.Context, uuid.UUID, string, string) (core.Project, error) {
+	store.createProject = func(context.Context, uuid.UUID, string, string, []string) (core.Project, error) {
 		return core.Project{}, core.ErrSlugTaken
 	}
 

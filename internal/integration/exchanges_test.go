@@ -137,7 +137,7 @@ func TestExchangeWithNothingOptional(t *testing.T) {
 func TestExchangesAreScopedToTheirProject(t *testing.T) {
 	store, user, project := newStoreWithProject(t)
 
-	other, err := store.CreateProject(t.Context(), user.ID, "billing", "Billing API")
+	other, err := store.CreateProject(t.Context(), user.ID, "billing", "Billing API", nil)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}

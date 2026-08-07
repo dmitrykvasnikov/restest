@@ -13,12 +13,17 @@ Single Go binary, PostgreSQL, server-rendered HTML. No npm in the toolchain, no 
 
 ## Project status
 
-**Milestones M0 through M4 are done.** The mock server works, it holds state, and it writes down
+**Milestones M0 through M5 are done.** The mock server works, it holds state, and it writes down
 what passed through it: define an endpoint or a collection in the web interface and it answers
 `curl` immediately, with no restart and no deploy. `POST` a record and the next `GET` returns it.
 Every mock request lands in a per-project log that tails live in the browser, so what a client
-actually sent is visible as it arrives. Ready-made public datasets and a demo project reachable
-without an account are the next milestone.
+actually sent is visible as it arrives. And there is something to try before any of that: a
+shared demo project at `/m/demo/…` answers with no account at all. Programmatic configuration —
+API tokens and the rest of `/api/v1/` — is the next milestone.
+
+```sh
+curl localhost:8080/m/demo/users        # eight users, no account, no token
+```
 
 | Milestone | Subject | Status |
 |---|---|---|
@@ -27,8 +32,8 @@ without an account are the next milestone.
 | M2 | Static mocks and the route matcher (`/m/{slug}/…`) | **done** |
 | M3 | Stateful collections: CRUD over stored documents, filters, reset to seed | **done** |
 | M4 | Request log and inspector: recording, live tail over SSE, retention | **done** |
-| M5 | Public datasets and the demo project | next |
-| M6 | API tokens and management API | planned |
+| M5 | Public datasets and the demo project at `/m/demo/…` | **done** |
+| M6 | API tokens and management API | next |
 | M7 | Hardening: rate limits, CSP, metrics, backups | planned |
 
 `PLAN.md` holds the full milestone list and each one's "done when" condition.
@@ -70,6 +75,15 @@ without an account are the next milestone.
 - **Retention by partition.** `exchanges` is partitioned by month; a daily job creates the next
   three months and detaches and drops anything older than the window, so expiry is a file unlink
   rather than a `DELETE` over the busiest table in the schema.
+- **Built-in datasets.** `users`, `posts`, `comments` and `todos`, cross-referenced by
+  `userId` and `postId`. Tick them when creating a project and it answers the six REST routes
+  over each of them straight away. A dataset is stored as the collection's seed, so it can be
+  edited, reset and deleted like anything you typed yourself.
+- **The demo project** at `/m/demo/…`, provisioned at startup and served to anyone with no
+  account, no cookie and no token. Writes to it are real writes — a `POST` comes back on the
+  next `GET` — and every collection is restored to its seed hourly, so the next visitor finds
+  it as you did. It belongs to an account with a random discarded password, so it is in
+  nobody's project list and nobody can edit it.
 - Health probes, embedded and content-hashed static assets, structured JSON logs with a request
   id, graceful shutdown, migrations applied at startup.
 
@@ -89,7 +103,12 @@ without an account are the next milestone.
   would belong to. They are in the process log, not the inspector.
 - No API tokens and nothing else under `/api/v1/`. The schema exists in migration `00001`; the
   code does not.
-- No demo project — `/m/demo/…` is M5, and `demo` is a reserved slug held for it.
+- **Datasets can only be chosen when a project is created.** Adding one to a project that
+  already exists means creating the collection and its endpoint by hand — the seed of a
+  built-in dataset is not offered from the collection form.
+- **The demo project has no page.** It is offered on the login page and reached with `curl`;
+  there is no browsable view of what is in it, because it belongs to no account that can log
+  in and open it.
 - **No state isolation.** Collections hold one set of documents per project, so two parallel CI
   runs against one project interfere. `DESIGN.md` §12.1 has the additive path.
 - No password reset, no account deletion in the UI, no rate limiting, no CSP, and no CORS headers
@@ -147,7 +166,21 @@ does **not** read `.env` — compose does, the Makefile does not.
 
 ## What you can do right now
 
-A complete pass through everything M0 to M4 deliver.
+A complete pass through everything M0 to M5 deliver.
+
+**Before anything else**, with the stack up and no account at all:
+
+```sh
+curl localhost:8080/m/demo/users            # the demo project's users dataset
+curl localhost:8080/m/demo/users/1          # {"id":1,"name":"Ada Lovelace",…}
+curl 'localhost:8080/m/demo/posts?userId=1' # posts reference users by userId
+curl -X POST localhost:8080/m/demo/todos -d '{"title":"Try restest","completed":false}'
+```
+
+The demo holds all four built-in datasets — `users`, `posts`, `comments`, `todos` — and your
+writes are real: the record you just created comes back on the next `GET`, survives a restart,
+and is cleared when the demo is restored to its seeds, which happens hourly and at startup.
+Set `RESTEST_DEMO_ENABLED=false` on an instance that should not serve it.
 
 **In a browser** at <http://localhost:8080>:
 
@@ -156,7 +189,11 @@ A complete pass through everything M0 to M4 deliver.
    The slug is what will appear in mock URLs. It is trimmed and lower-cased before validation, so
    `"  MyAPI "` becomes `myapi`, and then must be lower-case letters, digits and hyphens, starting
    and ending alphanumeric, 1–40 characters. `api`, `admin`, `demo`, `healthz`, `m` and `static`
-   are reserved and refused.
+   are reserved and refused — `demo` because the shared demo project answers there.
+   The same form offers the four **built-in datasets**. Tick any of them and the project is
+   created with a collection holding that dataset's seed and the endpoint serving it, so
+   `/m/{slug}/users` answers before you have defined anything yourself. The project and every
+   dataset are one transaction: if any part is refused, no project is created.
 3. The project page shows its mock base URL — `http://localhost:8080/m/{slug}/` — and, below it,
    the endpoints it serves.
 4. **New endpoint**, kind **static**. The form opens on a working example: `GET /hello` returning
@@ -317,6 +354,7 @@ logout form and the page's own form — so a scraper wants the right one.
 | `/healthz`, `/readyz` | GET | working, no session |
 | `/static/…` | GET | embedded assets, content-hashed, cached immutably |
 | `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF |
+| `/m/demo/…` | any | **working** — the shared demo project, the same handler as any other slug |
 | `/api/v1/projects/{slug}/collections/{name}/reset` | POST | **working** — session cookie and CSRF today, bearer tokens in M6 |
 | the rest of `/api/v1/…` | any | **M6 — not routed yet** |
 
@@ -340,6 +378,8 @@ to start and reports every problem in one pass rather than one restart per mista
 | `RESTEST_LOG_BODY_LIMIT` | `65536` | Bytes of each recorded body kept, 0–1048576. Above it the body is stored truncated and marked. |
 | `RESTEST_LOG_BUFFER` | `1000` | Exchanges that may wait to be written, 1–1000000. Beyond it they are dropped and counted, never queued in front of a response. |
 | `RESTEST_LOG_RETENTION_MONTHS` | `3` | Months of request log kept, counting the current one, 1–120. Expiry detaches and drops that month's partition. |
+| `RESTEST_DEMO_ENABLED` | `true` | Provision the shared demo project at startup and offer it on the login page. `false` leaves an existing demo in the database alone rather than deleting it. |
+| `RESTEST_DEMO_RESET_INTERVAL` | `1h` | How often the demo is restored to its seeds, `1m`–`168h`. It also runs once at startup. |
 
 `RESTEST_BASE_URL` does two jobs: it is what the UI shows as the root of every mock URL, and its
 **scheme decides whether cookies are marked `Secure`**. A browser never returns a `Secure` cookie
@@ -410,9 +450,20 @@ tests, against real Postgres, check that rows land in their month's partition, t
 months fall into the default, that retention drops what has expired and never the current month,
 and that maintenance is safe to run twice.
 
-`TestTheM2Milestone`, `TestTheM3Milestone` and `TestTheM4Milestone` walk each milestone end to
-end: define it in the form, `curl` it, and — for M3 — post, fetch, filter, delete and reset; for
-M4, open the SSE stream, send a request, and read the row off the wire.
+The datasets and the demo are tested at both levels. Unit tests prove every built-in dataset is
+valid input to the same validation a typed seed goes through, that it seeds to the number of
+documents the form promises with the identifiers its summary implies, and that an unknown
+dataset name is refused rather than skipped. Against real Postgres: a project created with two
+datasets serves them immediately and filters over them; a project asked for a dataset that does
+not exist creates nothing at all, because it is one transaction; provisioning the demo twice
+produces one project, one set of collections and one account; and provisioning refuses to adopt
+a project holding the demo slug that is not the demo.
+
+`TestTheM2Milestone` through `TestTheM5Milestone` walk each milestone end to end: define it in
+the form, `curl` it, and — for M3 — post, fetch, filter, delete and reset; for M4, open the SSE
+stream, send a request, and read the row off the wire; for M5, read and write the demo from a
+client with no cookies at all, reset it, and watch the visitor's document disappear and the
+identifier counter go back with it.
 
 ## Repository layout
 
@@ -423,8 +474,10 @@ internal/
   logging/            slog handler construction
   database/           pgx pool, migration run
   core/               domain logic: users, projects, endpoints, collections, documents,
-                      the exchange recorder and log partition maintenance
+                      the built-in datasets and the demo project, the exchange recorder
+                      and log partition maintenance
     queries/          hand-written SQL, input to sqlc
+    datasets/         the built-in dataset seeds, embedded JSON
     dbgen/            sqlc output — generated, never edited
   mock/               inbound: the radix trie, the router, route expansion, suggestions
   web/                handlers, middleware, sessions, CSRF, the mock and collection handlers

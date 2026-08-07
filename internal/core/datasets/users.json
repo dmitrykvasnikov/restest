@@ -1,0 +1,10 @@
+[
+  { "id": 1, "name": "Ada Lovelace",     "username": "ada",     "email": "ada@example.com",     "role": "admin",    "active": true,  "city": "London" },
+  { "id": 2, "name": "Alan Turing",      "username": "alan",    "email": "alan@example.com",    "role": "engineer", "active": true,  "city": "Manchester" },
+  { "id": 3, "name": "Grace Hopper",     "username": "grace",   "email": "grace@example.com",   "role": "admin",    "active": true,  "city": "New York" },
+  { "id": 4, "name": "Katherine Johnson","username": "katherine","email": "katherine@example.com","role": "analyst", "active": true,  "city": "Hampton" },
+  { "id": 5, "name": "Edsger Dijkstra",  "username": "edsger",  "email": "edsger@example.com",  "role": "engineer", "active": false, "city": "Rotterdam" },
+  { "id": 6, "name": "Barbara Liskov",   "username": "barbara", "email": "barbara@example.com", "role": "engineer", "active": true,  "city": "Los Angeles" },
+  { "id": 7, "name": "Ken Thompson",     "username": "ken",     "email": "ken@example.com",     "role": "engineer", "active": true,  "city": "New Orleans" },
+  { "id": 8, "name": "Margaret Hamilton","username": "margaret","email": "margaret@example.com","role": "analyst",  "active": false, "city": "Paoli" }
+]

@@ -60,6 +60,17 @@ delete from collections c
 using projects p
 where c.id = @id and p.id = c.project_id and p.owner_id = @owner_id;
 
+-- DemoCollections is what the scheduled demo reset works through. Like the two
+-- statements below it, it has no owner to scope by: the demo project belongs to
+-- an account nobody logs in as, and the job runs on a timer rather than for
+-- somebody.
+--
+-- name: DemoCollections :many
+select c.id from collections c
+join projects p on p.id = c.project_id
+where p.is_demo
+order by p.slug, c.name;
+
 -- CollectionIDField is what a write needs to know before it can put the
 -- identifier back into the document: which field carries it.
 --

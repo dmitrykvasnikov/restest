@@ -5,10 +5,22 @@
 -- does not exist, and the surest way to get that is to make the ownership test
 -- part of the query rather than a check the caller might forget.
 
+-- CreateProject takes is_demo because the shared demo project is created by the
+-- application at startup and is otherwise an ordinary project. No form can set
+-- it: the flag arrives from core.EnsureDemoProject and nowhere else.
+--
 -- name: CreateProject :one
-insert into projects (owner_id, slug, name)
-values (@owner_id, @slug, @name)
+insert into projects (owner_id, slug, name, is_demo)
+values (@owner_id, @slug, @name, @is_demo)
 returning *;
+
+-- ProjectBySlug is the one project lookup with no owner in it. The demo project
+-- has an owner nobody can log in as, so provisioning it at startup has no user
+-- to scope by; the slug it uses is reserved, so no account's project can hold
+-- it.
+--
+-- name: ProjectBySlug :one
+select * from projects where slug = @slug;
 
 -- ProjectsByOwner drives the project list. Newest first: the one just created
 -- is the one being looked for.

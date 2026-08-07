@@ -212,6 +212,52 @@ A shared demo project is reachable without any account at `/m/demo/…`, coverin
 writes to the demo project are accepted and echoed back but reset on a fixed schedule, so
 one user's experiment cannot spoil the demo for everyone else.
 
+### 6.1 What M5 decided
+
+**A dataset is a collection and the endpoint that serves it, and nothing else.** Not a
+static endpoint, not a response header, not a delay: those are the things a user is here to
+decide, and a template that decided them would be answering a question nobody asked. The
+four datasets are JSON files embedded in the binary and stored as the collection's *seed*,
+which means a dataset is the same object a user could have typed into the editor — so
+resetting it, editing it and deleting it all work without a single case for "it came from a
+template". They cross-reference each other (`posts.userId`, `comments.postId`,
+`todos.userId`) so that choosing two of them gives something worth writing a client against,
+and each stands alone if only one is chosen.
+
+**A project and its datasets are created in one transaction.** A project that exists holding
+two of the three datasets it was asked for is a state the interface offers no way to repair,
+and the failure that produces it — the database refusing a statement — is exactly when a user
+is least able to work out what is missing. That is also why an unrecognised dataset name is a
+rejection rather than something to skip.
+
+**Datasets are offered at creation and not afterwards.** Adding one to a project that already
+exists is creating a collection, which has its own form; a checkbox on the edit page would
+imply the seed could be applied to a project that has data in it, which is the surprise the
+reset button exists to make deliberate.
+
+**The demo is an ordinary project.** A row in `projects` with `is_demo` set, an owner, real
+collections, real documents, real endpoints, a real request log. Nothing about serving it
+takes a different path through the matcher or the handlers — a demo that did would be
+demonstrating a different program. It is provisioned at startup rather than by a migration,
+because a migration that inserts application data is a migration that has to be kept in step
+with the application's own validation rules.
+
+**Its owner is an account nobody can log in as.** Ownership runs user → project throughout
+the schema, and a nullable owner for one project would put a null check on every query that
+reads one. `demo@restest.invalid` is registered with a random password that is hashed and
+then dropped — `.invalid` is reserved by RFC 6761, so the address is nobody's and can receive
+nothing. The demo therefore appears in no account's project list and no account can open it,
+which falls out of the existing owner-scoped queries rather than needing a rule of its own.
+
+**§12.2 answered: anonymous writes are persisted, and the reset is hourly by default**
+(`RESTEST_DEMO_RESET_INTERVAL`, floor one minute; `RESTEST_DEMO_ENABLED` turns the whole
+thing off). Persisting them is the point: a demo whose `POST` did not come back on the next
+`GET` would be demonstrating the one thing restest does not do. What makes that affordable is
+the reset — every demo collection restored to its seed, each in its own transaction, on a
+timer and once at startup, so a restart is also a way to put the demo back. An hour is long
+enough to try something out and short enough that what the last visitor left is not what the
+next one finds.
+
 ## 7. Request log and inspector
 
 Every mock request is recorded as an Exchange: method, path, query, request headers and
@@ -397,8 +443,9 @@ restest/
     database/      # pgx pool, migration run
     core/          # users, projects, tokens, Exchange type, storage
       queries/     # hand-written SQL, input to sqlc
+      datasets/    # the built-in dataset seeds, embedded (§6.1)
       dbgen/       # sqlc output — generated, never edited
-    mock/          # inbound: matcher, collections, seeding
+    mock/          # inbound: the matcher and route expansion
     web/           # handlers, middleware
       templates/   # Go templates, embedded via go:embed
       static/      # generated CSS and vendored JS, embedded via go:embed
@@ -423,6 +470,11 @@ change the moment a deployment changes it.
 `internal/core/queries/`. The migrations are the only schema definition: there
 is no second copy for the generator to drift from.
 
+The built-in datasets sit in `core` rather than in `mock` because they are domain data —
+collections and their seeds — and installing one is a store operation. `mock` depends on
+`core` and not the reverse, so a seed defined in `mock` could not be written by the store
+that has to persist it.
+
 ## 12. Open questions
 
 Genuinely undecided; none block starting work.
@@ -435,8 +487,13 @@ Genuinely undecided; none block starting work.
    same documents whatever its value: state is per collection, not per parameter. Isolation
    is still the nullable scope column on `documents` plus a client-supplied header, and it is
    still additive.
-2. **Demo project reset policy** — how often, and whether anonymous writes are persisted at
-   all or only echoed.
+2. ~~**Demo project reset policy** — how often, and whether anonymous writes are persisted at
+   all or only echoed.~~ **Settled by M5.** Writes are **persisted** — they are ordinary
+   documents in ordinary collections, because a demo whose `POST` did not come back on the
+   next `GET` would demonstrate the opposite of what restest does — and every demo collection
+   is **restored to its seed every hour**, and once at startup. Both the interval and whether
+   the demo exists at all are configurable (`RESTEST_DEMO_RESET_INTERVAL`,
+   `RESTEST_DEMO_ENABLED`); see §6.1.
 3. ~~**Log retention window** and body size cap.~~ **Settled by M4.** Retention is **three
    months** counting the current one — long enough to answer "what did that client send last
    week", short enough that a mock server does not quietly become an archive — and the body cap

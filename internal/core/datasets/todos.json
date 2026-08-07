@@ -1,0 +1,17 @@
+[
+  { "id": 1,  "userId": 1, "title": "Write the acceptance criteria",   "completed": true,  "due": "2026-01-12" },
+  { "id": 2,  "userId": 1, "title": "Review the migration plan",       "completed": false, "due": "2026-01-19" },
+  { "id": 3,  "userId": 2, "title": "Reproduce the timeout on staging","completed": true,  "due": "2026-01-14" },
+  { "id": 4,  "userId": 2, "title": "Add a retry with a backoff",      "completed": false, "due": "2026-01-21" },
+  { "id": 5,  "userId": 3, "title": "Rotate the deploy credentials",   "completed": true,  "due": "2026-01-09" },
+  { "id": 6,  "userId": 3, "title": "Write the runbook for failover",  "completed": false, "due": "2026-02-02" },
+  { "id": 7,  "userId": 4, "title": "Check the numbers by hand",       "completed": true,  "due": "2026-01-16" },
+  { "id": 8,  "userId": 4, "title": "Chase the missing invoice",       "completed": false, "due": "2026-01-30" },
+  { "id": 9,  "userId": 5, "title": "Delete the dead feature flag",    "completed": false, "due": "2026-02-06" },
+  { "id": 10, "userId": 5, "title": "Simplify the retry loop",         "completed": false, "due": "2026-02-13" },
+  { "id": 11, "userId": 6, "title": "Draft the interface change",      "completed": true,  "due": "2026-01-23" },
+  { "id": 12, "userId": 6, "title": "Benchmark the new index",         "completed": false, "due": "2026-02-09" },
+  { "id": 13, "userId": 7, "title": "Audit the build pipeline",        "completed": false, "due": "2026-02-16" },
+  { "id": 14, "userId": 8, "title": "Update the onboarding notes",     "completed": true,  "due": "2026-01-27" },
+  { "id": 15, "userId": 8, "title": "Book the retrospective",          "completed": false, "due": "2026-02-20" }
+]

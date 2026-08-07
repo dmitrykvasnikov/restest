@@ -562,7 +562,7 @@ func TestCollectionNamesAreUniquePerProject(t *testing.T) {
 	}
 
 	// The same name in another project is fine: the pair is what is unique.
-	other, err := store.CreateProject(t.Context(), user.ID, "billing", "Billing API")
+	other, err := store.CreateProject(t.Context(), user.ID, "billing", "Billing API", nil)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -681,7 +681,7 @@ func TestEndpointChangesKind(t *testing.T) {
 func TestCollectionEndpointCannotBorrowAnotherProjectsCollection(t *testing.T) {
 	store, user, _, collection := newStoreWithCollection(t)
 
-	other, err := store.CreateProject(t.Context(), user.ID, "billing", "Billing API")
+	other, err := store.CreateProject(t.Context(), user.ID, "billing", "Billing API", nil)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}

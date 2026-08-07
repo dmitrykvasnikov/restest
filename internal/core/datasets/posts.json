@@ -1,0 +1,12 @@
+[
+  { "id": 1, "userId": 1, "title": "Notes on the analytical engine", "body": "A machine that weaves algebraic patterns the way a loom weaves flowers and leaves.", "tags": ["history", "computing"], "published": true },
+  { "id": 2, "userId": 2, "title": "On computable numbers",          "body": "A definite method for deciding whether a number can be written down by a machine.", "tags": ["theory"], "published": true },
+  { "id": 3, "userId": 3, "title": "The first compiler",             "body": "Nobody believed a computer could understand English, so the compiler was written anyway.", "tags": ["history", "tools"], "published": true },
+  { "id": 4, "userId": 2, "title": "Universality, again",            "body": "One machine that can imitate every other one, given the right description on its tape.", "tags": ["theory"], "published": false },
+  { "id": 5, "userId": 5, "title": "Go to statement considered harmful", "body": "The quality of programmers is a decreasing function of the density of go to statements.", "tags": ["opinion", "style"], "published": true },
+  { "id": 6, "userId": 6, "title": "A behavioural notion of subtyping", "body": "If it looks like the supertype and behaves like it, the program cannot tell the difference.", "tags": ["theory", "design"], "published": true },
+  { "id": 7, "userId": 7, "title": "Reflections on trusting trust",  "body": "You cannot trust code you did not totally create yourself. Not even the compiler.", "tags": ["security"], "published": true },
+  { "id": 8, "userId": 8, "title": "Software engineering, the term", "body": "The guidance software needed a name to be taken as seriously as the hardware around it.", "tags": ["history", "process"], "published": true },
+  { "id": 9, "userId": 4, "title": "Checking the trajectory by hand", "body": "The numbers came out of the machine, and then somebody had to agree with them.", "tags": ["history"], "published": false },
+  { "id": 10, "userId": 1, "title": "The machine has no pretensions", "body": "It can do whatever we know how to order it to perform, and nothing beyond that.", "tags": ["opinion"], "published": true }
+]

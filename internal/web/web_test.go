@@ -32,7 +32,7 @@ type stubStore struct {
 	registerUser          func(ctx context.Context, email, password string) (core.User, error)
 	authenticate          func(ctx context.Context, email, password string) (core.User, error)
 	userByID              func(ctx context.Context, id uuid.UUID) (core.User, error)
-	createProject         func(ctx context.Context, ownerID uuid.UUID, slug, name string) (core.Project, error)
+	createProject         func(ctx context.Context, ownerID uuid.UUID, slug, name string, datasets []string) (core.Project, error)
 	projectsByOwner       func(ctx context.Context, ownerID uuid.UUID) ([]core.Project, error)
 	projectByOwnerAndSlug func(ctx context.Context, ownerID uuid.UUID, slug string) (core.Project, error)
 	updateProject         func(ctx context.Context, ownerID, id uuid.UUID, slug, name string) (core.Project, error)
@@ -97,11 +97,11 @@ func (s stubStore) UserByID(ctx context.Context, id uuid.UUID) (core.User, error
 	return s.userByID(ctx, id)
 }
 
-func (s stubStore) CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string) (core.Project, error) {
+func (s stubStore) CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string, datasets []string) (core.Project, error) {
 	if s.createProject == nil {
 		return core.Project{}, errNotStubbed
 	}
-	return s.createProject(ctx, ownerID, slug, name)
+	return s.createProject(ctx, ownerID, slug, name, datasets)
 }
 
 func (s stubStore) ProjectsByOwner(ctx context.Context, ownerID uuid.UUID) ([]core.Project, error) {
