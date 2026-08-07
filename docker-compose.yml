@@ -53,6 +53,11 @@ services:
       RESTEST_LOG_BODY_LIMIT: ${RESTEST_LOG_BODY_LIMIT:-65536}
       RESTEST_LOG_BUFFER: ${RESTEST_LOG_BUFFER:-1000}
       RESTEST_LOG_RETENTION_MONTHS: ${RESTEST_LOG_RETENTION_MONTHS:-3}
+      # The shared demo project at /m/demo/, provisioned at startup and
+      # restored to its seeds on this interval. Set DEMO_ENABLED to false on an
+      # instance that should serve nothing to visitors without an account.
+      RESTEST_DEMO_ENABLED: ${RESTEST_DEMO_ENABLED:-true}
+      RESTEST_DEMO_RESET_INTERVAL: ${RESTEST_DEMO_RESET_INTERVAL:-1h}
     ports:
       # Loopback by default: until M1 there is no authentication at all, and
       # even after it there is no reason to put a development instance on the

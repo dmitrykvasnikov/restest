@@ -20,6 +20,29 @@ type projectForm struct {
 	// Existing is the slug the project had when the page was rendered, so a
 	// rejected rename still knows which project it was editing.
 	Existing string
+
+	// Datasets are the built-in datasets on offer, and Chosen the ones that
+	// were ticked, so a rejected form comes back with the boxes as they were
+	// left. Both are empty on the edit page: a dataset is something a project
+	// is created with, and adding one afterwards is creating a collection,
+	// which has its own form.
+	Datasets []core.Dataset
+	Chosen   map[string]bool
+}
+
+// Chose reports whether the named dataset was ticked. A method rather than a
+// map lookup in the template, because `index .Chosen .Name` inside a range over
+// .Datasets reads as neither.
+func (f projectForm) Chose(name string) bool { return f.Chosen[name] }
+
+// chosenSet turns what the form submitted into the set the page re-renders
+// from.
+func chosenSet(names []string) map[string]bool {
+	chosen := make(map[string]bool, len(names))
+	for _, name := range names {
+		chosen[name] = true
+	}
+	return chosen
 }
 
 // projectList is the data behind the list page.
@@ -41,7 +64,11 @@ func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request, user 
 
 func (s *Server) handleProjectNew(w http.ResponseWriter, r *http.Request, _ core.User) {
 	data := s.newPage(r, "New project")
-	data.Form = projectForm{Action: "/projects"}
+	data.Form = projectForm{
+		Action:   "/projects",
+		Datasets: core.Datasets(),
+		Chosen:   map[string]bool{},
+	}
 	s.render(w, r, http.StatusOK, "project_form", data)
 }
 
@@ -54,13 +81,18 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request, use
 
 	slug := r.PostFormValue("slug")
 	name := r.PostFormValue("name")
+	// One checkbox per dataset, all named `datasets`, so an unticked box sends
+	// nothing and the field is simply absent when none were chosen.
+	datasets := r.PostForm["datasets"]
 
-	project, err := s.store.CreateProject(r.Context(), user.ID, slug, name)
+	project, err := s.store.CreateProject(r.Context(), user.ID, slug, name, datasets)
 	if err != nil {
 		s.rejectProject(w, r, "New project", projectForm{
-			Slug:   slug,
-			Name:   name,
-			Action: "/projects",
+			Slug:     slug,
+			Name:     name,
+			Action:   "/projects",
+			Datasets: core.Datasets(),
+			Chosen:   chosenSet(datasets),
 		}, err)
 		return
 	}
@@ -72,6 +104,14 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request, use
 	s.reloadRoutes(r)
 
 	s.flash(r.Context(), flashSuccess, fmt.Sprintf("Project %q created.", project.Slug))
+	if len(datasets) > 0 {
+		// Said plainly, because a project that answers requests the moment it
+		// is created is the surprising part and nothing else on the page says
+		// so.
+		s.flash(r.Context(), flashInfo, fmt.Sprintf(
+			"The datasets you chose are already being served: try %s%s%s.",
+			s.baseURL, project.MockPath(), datasets[0]))
+	}
 	redirect(w, r, projectPath(project.Slug))
 }
 

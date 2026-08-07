@@ -6,8 +6,8 @@ Written 2026-08-02, before any code.
 Milestones are sequenced so that each one ends at a state that can be demonstrated and, from
 M2 onward, is genuinely usable. Nothing here is a deadline; the ordering is the point.
 
-**Status (2026-08-07):** M0–M4 merged to master. M5 (public datasets and the demo project) is
-next; see `notes/notes_05_1.md` § "Next step" for where to pick up.
+**Status (2026-08-07):** M0–M5 merged to master. M6 (API tokens and the management API) is
+next; see `notes/notes_06_1.md` § "Next step" for where to pick up.
 
 ---
 
@@ -88,16 +88,27 @@ both configurable. See §7.1 there for the reasoning.
 **Carried forward:** the log has no search or filters, and is not reachable over `/api/v1/`. The
 second lands with M6, which routes the rest of the API anyway.
 
-## M5 — Public datasets ⬅ next up (feature 06, not started)
+## M5 — Public datasets ✅ done (feature/06-datasets)
 
-- [ ] Seed templates: `users`, `posts`, `comments`, `todos`.
-- [ ] New projects can be created pre-seeded from a template.
-- [ ] Demo project provisioned at startup, reachable at `/m/demo/…` with no account.
-- [ ] Scheduled reset of the demo project so one visitor cannot spoil it for the next.
+- [x] Seed templates: `users`, `posts`, `comments`, `todos`. Embedded JSON, stored as a
+      collection's seed, so a dataset is the same object a user could have typed.
+- [x] New projects can be created pre-seeded from a template — the project and every dataset
+      it was created with in one transaction.
+- [x] Demo project provisioned at startup, reachable at `/m/demo/…` with no account. An
+      ordinary project with an owner nobody can log in as.
+- [x] Scheduled reset of the demo project so one visitor cannot spoil it for the next: hourly
+      by default, and once at startup.
 
 **Done when:** `curl /m/demo/users` works from a logged-out browser.
 
-## M6 — API tokens and management API (not started)
+**Decisions that closed `DESIGN.md` §12.2:** anonymous writes are persisted, and the demo is
+restored to its seeds every hour. See §6.1 there for the reasoning.
+
+**Carried forward:** a dataset can only be chosen when a project is created; adding one to an
+existing project means creating a collection by hand. The demo has no page of its own — it is
+offered on the login page and reached with `curl`.
+
+## M6 — API tokens and management API ⬅ next up (feature 07, not started)
 
 - [ ] Token CRUD; plaintext shown once, SHA-256 stored, prefix retained for identification.
 - [ ] `Authorization: Bearer` middleware, updating `last_used_at`.
@@ -136,5 +147,6 @@ Carried from `DESIGN.md` §12. None block M0–M2.
 - **State isolation (§12.1)** lands in M3 if it is wanted early. The additive path is a nullable
   scope column on `documents` plus a client-supplied header; deciding late costs a migration but
   not a redesign.
-- Demo reset policy (§12.2) is needed by M5. The retention window and body cap (§12.3) were
-  settled by M4: three months and 64 KiB, both configurable.
+- Nothing here is open any longer. The demo reset policy (§12.2) was settled by M5 — writes
+  persist, the seeds come back hourly — and the retention window and body cap (§12.3) by M4:
+  three months and 64 KiB. All four settings are configurable.

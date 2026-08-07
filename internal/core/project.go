@@ -35,21 +35,49 @@ func (p Project) MockPath() string { return "/m/" + p.Slug + "/" }
 // without an account.
 const projectsSlugConstraint = "projects_slug_key"
 
-// CreateProject validates and stores a new project owned by ownerID.
-func (s *Store) CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string) (Project, error) {
+// CreateProject validates and stores a new project owned by ownerID, optionally
+// pre-seeded from the built-in datasets named in datasets (DESIGN.md §6).
+//
+// Each dataset becomes a collection holding its seed and an endpoint of kind
+// collection rooted at /{name}, so a project created with `users` answers
+// /m/{slug}/users the moment the form is submitted. An empty list creates the
+// empty project it always did.
+func (s *Store) CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string, datasets []string) (Project, error) {
 	slug, name = normalizeProject(slug, name)
 
 	var fe FieldErrors
 	validateSlug(&fe, slug)
 	validateProjectName(&fe, name)
+	chosen := selectDatasets(&fe, datasets)
 	if err := fe.orNil(); err != nil {
 		return Project{}, err
 	}
+	return s.createProject(ctx, ownerID, slug, name, false, chosen)
+}
 
-	row, err := s.q.CreateProject(ctx, dbgen.CreateProjectParams{
+// createProject is the storage half, past validation.
+//
+// It is separate because the demo project is created with a slug the reserved
+// list refuses (validate.go) and a flag no form can set. Everything below the
+// validation is the same work, and having it once is what makes the demo a
+// project like any other rather than a second kind of thing.
+func (s *Store) createProject(ctx context.Context, ownerID uuid.UUID, slug, name string, isDemo bool, datasets []Dataset) (Project, error) {
+	// One transaction for the project and everything the datasets add to it: a
+	// project that exists holding two of the three datasets it was asked for is
+	// a state the interface offers no way to repair.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Project{}, fmt.Errorf("begin create project: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // the commit path has already reported
+
+	q := s.q.WithTx(tx)
+
+	row, err := q.CreateProject(ctx, dbgen.CreateProjectParams{
 		OwnerID: fromUUID(ownerID),
 		Slug:    slug,
 		Name:    name,
+		IsDemo:  isDemo,
 	})
 	if err != nil {
 		if uniqueViolation(err, projectsSlugConstraint) {
@@ -57,7 +85,18 @@ func (s *Store) CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name
 		}
 		return Project{}, fmt.Errorf("create project: %w", err)
 	}
-	return toProject(row), nil
+
+	project := toProject(row)
+	for _, d := range datasets {
+		if err := installDataset(ctx, tx, q, ownerID, project.ID, d); err != nil {
+			return Project{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Project{}, fmt.Errorf("commit create project: %w", err)
+	}
+	return project, nil
 }
 
 // ProjectsByOwner lists everything ownerID owns, newest first.

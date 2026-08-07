@@ -115,6 +115,28 @@ func run(ctx context.Context) error {
 	// either way.
 	go store.MaintainExchangeLogLoop(ctx, logMaintenanceInterval, cfg.LogRetentionMonths, logger)
 
+	// The shared demo project, provisioned before the listener opens so that
+	// /m/demo/ answers the first request rather than the second. A failure here
+	// is logged and not fatal: the demo is a convenience, and refusing to serve
+	// anybody's mocks because it could not be created would be the wrong trade.
+	if cfg.DemoEnabled {
+		if demo, err := store.EnsureDemoProject(ctx); err != nil {
+			logger.Error("provision the demo project", slog.String("error", err.Error()))
+		} else {
+			logger.Info("demo project ready",
+				slog.String("slug", demo.Slug),
+				slog.String("url", cfg.BaseURL+demo.MockPath()),
+				slog.Duration("reset_interval", cfg.DemoResetInterval),
+			)
+			// The route table was built before this, so it does not know about a
+			// demo that has just been created.
+			if err := matcher.Reload(ctx); err != nil {
+				return fmt.Errorf("route table after provisioning the demo: %w", err)
+			}
+			go store.ResetDemoProjectsLoop(ctx, cfg.DemoResetInterval, logger)
+		}
+	}
+
 	app, err := web.New(web.Options{
 		Logger:             logger,
 		Store:              store,
@@ -124,6 +146,7 @@ func run(ctx context.Context) error {
 		Recorder:           recorder,
 		LogBodyLimit:       cfg.LogBodyLimit,
 		LogRetentionMonths: cfg.LogRetentionMonths,
+		DemoEnabled:        cfg.DemoEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("web: %w", err)

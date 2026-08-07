@@ -269,6 +269,37 @@ func (q *Queries) DeleteCollection(ctx context.Context, arg DeleteCollectionPara
 	return result.RowsAffected(), nil
 }
 
+const demoCollections = `-- name: DemoCollections :many
+select c.id from collections c
+join projects p on p.id = c.project_id
+where p.is_demo
+order by p.slug, c.name
+`
+
+// DemoCollections is what the scheduled demo reset works through. Like the two
+// statements below it, it has no owner to scope by: the demo project belongs to
+// an account nobody logs in as, and the job runs on a timer rather than for
+// somebody.
+func (q *Queries) DemoCollections(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, demoCollections)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setNextSerial = `-- name: SetNextSerial :exec
 update collections set next_serial = $1, updated_at = now() where id = $2
 `

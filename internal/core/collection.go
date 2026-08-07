@@ -250,7 +250,28 @@ func (s *Store) ResetCollection(ctx context.Context, id uuid.UUID) (int, error) 
 		return 0, fmt.Errorf("read collection seed: %w", err)
 	}
 
-	docs, next, err := seedDocuments(row.Seed, row.IDField, row.IDStrategy)
+	n, err := applySeed(ctx, tx, q, id, row.Seed, row.IDField, row.IDStrategy)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit reset: %w", err)
+	}
+	return n, nil
+}
+
+// applySeed replaces a collection's documents with its seed and leaves the
+// identifier counter past everything the seed used, inside a transaction the
+// caller owns.
+//
+// It is shared by ResetCollection and by the creation of a collection from a
+// built-in dataset, so that a dataset installed with a project holds exactly
+// what a reset would restore. The delete is a no-op for a collection that has
+// just been created, which is a smaller price than two code paths that have to
+// be kept saying the same thing.
+func applySeed(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, id uuid.UUID, seed []byte, idField, strategy string) (int, error) {
+	docs, next, err := seedDocuments(seed, idField, strategy)
 	if err != nil {
 		return 0, err
 	}
@@ -266,10 +287,6 @@ func (s *Store) ResetCollection(ctx context.Context, id uuid.UUID) (int, error) 
 		NextSerial: next,
 	}); err != nil {
 		return 0, fmt.Errorf("reset the identifier counter: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit reset: %w", err)
 	}
 	return len(docs), nil
 }

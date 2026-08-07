@@ -13,8 +13,8 @@ import (
 
 const createProject = `-- name: CreateProject :one
 
-insert into projects (owner_id, slug, name)
-values ($1, $2, $3)
+insert into projects (owner_id, slug, name, is_demo)
+values ($1, $2, $3, $4)
 returning id, owner_id, slug, name, is_demo, created_at, updated_at
 `
 
@@ -22,6 +22,7 @@ type CreateProjectParams struct {
 	OwnerID pgtype.UUID
 	Slug    string
 	Name    string
+	IsDemo  bool
 }
 
 // Queries for projects.
@@ -30,8 +31,16 @@ type CreateProjectParams struct {
 // project that belongs to somebody else must be indistinguishable from one that
 // does not exist, and the surest way to get that is to make the ownership test
 // part of the query rather than a check the caller might forget.
+// CreateProject takes is_demo because the shared demo project is created by the
+// application at startup and is otherwise an ordinary project. No form can set
+// it: the flag arrives from core.EnsureDemoProject and nowhere else.
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject, arg.OwnerID, arg.Slug, arg.Name)
+	row := q.db.QueryRow(ctx, createProject,
+		arg.OwnerID,
+		arg.Slug,
+		arg.Name,
+		arg.IsDemo,
+	)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -77,6 +86,29 @@ type ProjectByOwnerAndSlugParams struct {
 
 func (q *Queries) ProjectByOwnerAndSlug(ctx context.Context, arg ProjectByOwnerAndSlugParams) (Project, error) {
 	row := q.db.QueryRow(ctx, projectByOwnerAndSlug, arg.OwnerID, arg.Slug)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Slug,
+		&i.Name,
+		&i.IsDemo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const projectBySlug = `-- name: ProjectBySlug :one
+select id, owner_id, slug, name, is_demo, created_at, updated_at from projects where slug = $1
+`
+
+// ProjectBySlug is the one project lookup with no owner in it. The demo project
+// has an owner nobody can log in as, so provisioning it at startup has no user
+// to scope by; the slug it uses is reserved, so no account's project can hold
+// it.
+func (q *Queries) ProjectBySlug(ctx context.Context, slug string) (Project, error) {
+	row := q.db.QueryRow(ctx, projectBySlug, slug)
 	var i Project
 	err := row.Scan(
 		&i.ID,

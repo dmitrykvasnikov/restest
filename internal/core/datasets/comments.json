@@ -1,0 +1,14 @@
+[
+  { "id": 1,  "postId": 1,  "author": "Grace Hopper",      "email": "grace@example.com",   "body": "The loom comparison is the clearest one anybody has written.", "approved": true },
+  { "id": 2,  "postId": 1,  "author": "Ken Thompson",      "email": "ken@example.com",     "body": "Second this. Filed under things I wish I had read earlier.", "approved": true },
+  { "id": 3,  "postId": 2,  "author": "Barbara Liskov",    "email": "barbara@example.com", "body": "Worth reading twice: the second half is where the argument lands.", "approved": true },
+  { "id": 4,  "postId": 2,  "author": "Edsger Dijkstra",   "email": "edsger@example.com",  "body": "I would put the definition before the example, but the example is good.", "approved": false },
+  { "id": 5,  "postId": 3,  "author": "Margaret Hamilton", "email": "margaret@example.com","body": "The part about nobody believing it is the part that dates best.", "approved": true },
+  { "id": 6,  "postId": 5,  "author": "Alan Turing",       "email": "alan@example.com",    "body": "Strong claim, well argued. The measurements would help.", "approved": true },
+  { "id": 7,  "postId": 5,  "author": "Ada Lovelace",      "email": "ada@example.com",     "body": "Disagree, but I cannot fault the reasoning as it stands.", "approved": true },
+  { "id": 8,  "postId": 6,  "author": "Katherine Johnson", "email": "katherine@example.com","body": "The example with the rectangle finally made this click.", "approved": true },
+  { "id": 9,  "postId": 7,  "author": "Grace Hopper",      "email": "grace@example.com",   "body": "Every review of a build pipeline should start from this paragraph.", "approved": true },
+  { "id": 10, "postId": 7,  "author": "Edsger Dijkstra",   "email": "edsger@example.com",  "body": "Uncomfortable, which is presumably the point of writing it down.", "approved": false },
+  { "id": 11, "postId": 8,  "author": "Barbara Liskov",    "email": "barbara@example.com", "body": "Naming the discipline was half the work of establishing it.", "approved": true },
+  { "id": 12, "postId": 10, "author": "Alan Turing",       "email": "alan@example.com",    "body": "Still the fairest description of what these machines actually do.", "approved": true }
+]

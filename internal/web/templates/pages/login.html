@@ -29,5 +29,23 @@
   <p class="mt-6 text-sm text-slate-600">
     No account yet? <a href="/register" class="font-medium text-slate-900 underline">Create one</a>.
   </p>
+
+  {{ with .Demo }}
+    {{ if and .Enabled .Datasets }}
+      {{ $first := index .Datasets 0 }}
+      <div class="mt-8 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 class="text-sm font-medium text-slate-900">Or try it without an account</h2>
+        <p class="mt-1 text-xs text-slate-500">
+          A shared demo project is served to anyone, with no login and no token. It holds
+          {{ range $i, $d := .Datasets }}{{ if $i }}, {{ end }}<code>{{ $d.Name }}</code>{{ end }},
+          and writes to it are real — they come back on the next request, and are cleared on a
+          schedule so the next visitor finds it as you did.
+        </p>
+        <pre class="mt-3 overflow-x-auto rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100"><code>curl {{ .URL }}{{ $first.Path }}
+curl {{ .URL }}{{ $first.Path }}/1
+curl -X POST {{ .URL }}{{ $first.Path }} -d '{"name":"Sam"}'</code></pre>
+      </div>
+    {{ end }}
+  {{ end }}
 </div>
 {{ end }}

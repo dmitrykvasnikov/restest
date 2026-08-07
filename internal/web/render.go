@@ -75,6 +75,26 @@ type pageData struct {
 	// Message carries the body of the standalone message page: 404, 500 and
 	// the CSRF rejection all use it.
 	Message string
+
+	// Demo describes the shared demo project. Its zero value means this
+	// instance does not serve one, which is what the pages check before
+	// offering it.
+	Demo demoOffer
+}
+
+// demoOffer is what a page needs to point a visitor at the demo project: that
+// there is one, where it answers, and what is in it. It is on every page rather
+// than on a form, because the pages that mention the demo are the ones an
+// anonymous visitor sees and those have no form data of their own.
+type demoOffer struct {
+	Enabled bool
+	// URL is the demo's mock root, absolute, so a visitor can paste it into a
+	// terminal rather than work out the host.
+	URL string
+	// Datasets are the collections it serves, which is what makes the offer
+	// concrete: "try the demo" is an invitation, "curl …/users" is an
+	// instruction.
+	Datasets []core.Dataset
 }
 
 // Asset returns the URL of a static file with the version stamp that lets it be
@@ -95,6 +115,13 @@ func (s *Server) newPage(r *http.Request, title string) pageData {
 		CSRFToken:    nosurf.Token(r),
 		AssetVersion: s.assetVersion,
 		Flashes:      s.popFlashes(r.Context()),
+	}
+	if s.demoEnabled {
+		data.Demo = demoOffer{
+			Enabled:  true,
+			URL:      s.baseURL + "/m/" + core.DemoSlug,
+			Datasets: core.Datasets(),
+		}
 	}
 	if user, ok := userFrom(r.Context()); ok {
 		data.User = &user
