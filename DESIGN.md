@@ -69,7 +69,7 @@ a SHA-256 hash alongside a short non-secret prefix for identification in the UI.
 | Space | Path | Auth |
 |---|---|---|
 | Web UI | `/` … | session cookie |
-| Management API | `/api/v1/…` | session cookie or API token |
+| Management API | `/api/v1/…` | session cookie or API token (§8.1) |
 | Mock traffic | `/m/{project-slug}/…` | none by default |
 
 **Decision: mock endpoints live under a path prefix, not a subdomain.**
@@ -191,16 +191,19 @@ The rest of the rules were settled while building M3:
   the new ones and never an empty collection halfway through being refilled. That matters
   because reset is what a test suite calls between runs, and the run after it starts at once.
 
-### 5.1 What the reset route can and cannot do today
+### 5.1 The reset route, and how it became scriptable
 
-`/api/v1/` is authenticated by the session cookie and guarded by CSRF, which makes the reset
-route usable from the interface and **not yet from a shell script**. The alternative was
+`/api/v1/` began authenticated by the session cookie and guarded by CSRF, which made the reset
+route usable from the interface and **not from a shell script**. The alternative at the time was
 exempting a cookie-authenticated mutating route from CSRF, which is the hole the guard exists
 to close.
 
-A token sent as `Authorization: Bearer` is not a cookie and needs no such exemption, so M6 is
-what makes this route scriptable — at this URL, unchanged. Building bearer auth early to close
-the gap would be building M6 inside M3.
+**M6 settled it, at this URL unchanged.** A token sent as `Authorization: Bearer` is not a
+cookie: it is not attached by the browser to a cross-site request, and it cannot be attached by
+script without a CORS preflight that never succeeds. So a request that presents one has no
+ambient credential to abuse and needs no CSRF token — provided that presenting a token means
+being authenticated *by* it. That condition is the whole of the security argument, and §8.1 is
+where it is written down.
 
 ## 6. Public datasets
 
@@ -333,6 +336,54 @@ table is back, only more complicated.
 
 **Programmatic access — API tokens**, scoped to a user, sent as `Authorization: Bearer`.
 Only the management API accepts them; mock traffic is unauthenticated.
+
+### 8.1 What M6 decided
+
+**A token is authenticated by itself or not at all.** A request to `/api/v1/` carrying
+`Authorization: Bearer …` is resolved against the token table and *never* falls back to the
+session, even when the caller also has a valid cookie. This is what makes the CSRF exemption
+sound rather than convenient: if a bad token could fall through to the cookie, a third-party
+page would only have to add a nonsense header to bypass the guard. Because it cannot, a forged
+cross-site request either carries no token — and is refused — or carries one the attacker
+already had, in which case CSRF was never what was protecting anything. The exemption is
+therefore not "requests under `/api/v1/`" but "requests under `/api/v1/` that presented a
+bearer credential", and those two are the same set only because of the no-fallback rule.
+
+**The row holds a SHA-256 and a prefix, and the plaintext exists once.** No salt and no slow
+KDF: those exist to make a low-entropy secret expensive to guess, and a token is 32 bytes from
+the system's random source, so there is nothing cheap to guess. The prefix — the mark plus
+eight characters — is what makes a row identifiable after the secret is gone, and it is the
+part of a token that can safely be pasted into a bug report. Tokens open with `rst_` so that
+one found in a shell history is recognisable, and the secret is raw URL-safe base64 so the
+whole string survives a query string, a shell and an unquoted YAML value.
+
+**Expiry is enforced in the statement that reads the token**, together with the update to
+`last_used_at`. One statement, because it answers one question — "is this good, and whose is
+it" — and two would leave a window in which a token revoked between them still answered. It
+also means an expired token does not get its last use bumped by a request it did not authorise.
+The write happens on every authenticated call; this is the management API, where a CI job makes
+a handful of requests, not mock traffic, where it would be a write per request served.
+
+**No route mints a token.** Tokens are created, listed and revoked in the interface only. A
+token that could mint tokens would turn one leaked CI credential into a permanent foothold that
+revoking the leaked one does not close, and the account that established the trust is the one
+that should extend it.
+
+**The API is the same domain as the interface, addressed the way a script already thinks.**
+Every handler calls the core method its corresponding page calls, so validation, ownership
+scoping and route-table rebuilds are the same code and not a second copy to keep in step. A
+project is addressed by its slug, a collection by its name and an endpoint by its id — the
+first two because they are what appears in a mock URL and in the reset route, the third because
+an endpoint has no name and a verb-and-path pair in a URL would need escaping to be readable.
+Projects and collections take `PATCH`, because their fields are independent; an endpoint takes
+`PUT`, because `kind` decides which of its other fields mean anything and a partial update would
+have to invent an answer for "the kind changed and the body was not mentioned". Unknown JSON
+fields are refused rather than ignored, for the same reason an unknown `_`-prefixed query
+parameter is (§5): a misspelt field that is silently dropped looks exactly like one that was
+applied.
+
+**The request log joined the API here**, read-only, closing the gap M4 left. An exchange is a
+record of what happened, and a record that can be edited is not one.
 
 ## 9. Stack
 

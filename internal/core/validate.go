@@ -385,6 +385,15 @@ func validateSeed(fe *FieldErrors, seed string) {
 		return
 	}
 
+	// A JSON null unmarshals into a slice without being an array, so it would
+	// pass the check below and then be refused by the column's
+	// `collections_seed_is_array` constraint — a 500 where a sentence beside
+	// the field belongs.
+	if strings.TrimSpace(seed) == "null" {
+		fe.Add("seed", "The seed has to be a JSON array. Use [] for an empty collection.")
+		return
+	}
+
 	var elements []json.RawMessage
 	if err := json.Unmarshal([]byte(seed), &elements); err != nil {
 		if json.Valid([]byte(seed)) {
@@ -405,6 +414,32 @@ func validateSeed(fe *FieldErrors, seed string) {
 			fe.Add("seed", fmt.Sprintf("Entry %d is not a JSON object. Every document in a collection is an object.", i+1))
 			return
 		}
+	}
+}
+
+// Limits on an API token definition.
+const (
+	maxTokenNameLen = 80
+	// maxTokenDays bounds the expiry field. Ten years is not a security
+	// property; it is a bound on what a mistyped number can produce.
+	maxTokenDays = 3650
+)
+
+func validateTokenName(fe *FieldErrors, name string) {
+	switch {
+	case name == "":
+		fe.Add("name", "Name the token — it is how you will know which one to revoke.")
+	case utf8.RuneCountInString(name) > maxTokenNameLen:
+		fe.Add("name", fmt.Sprintf("Use %d characters or fewer.", maxTokenNameLen))
+	case strings.ContainsFunc(name, isControl):
+		fe.Add("name", "Remove the control characters.")
+	}
+}
+
+func validateTokenExpiry(fe *FieldErrors, days int) {
+	if days < 0 || days > maxTokenDays {
+		fe.Add("expires_in_days",
+			fmt.Sprintf("Use a number of days between 1 and %d, or 0 for a token that does not expire.", maxTokenDays))
 	}
 }
 

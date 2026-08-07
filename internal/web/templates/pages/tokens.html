@@ -1,0 +1,122 @@
+{{ define "content" }}
+<div>
+  <h1 class="text-xl font-semibold tracking-tight">API tokens</h1>
+  <p class="mt-1 text-sm text-slate-500">
+    A token is how a script reaches the management API at
+    <code class="rounded bg-slate-100 px-1 py-0.5">{{ .BaseURL }}/api/v1/</code> — creating
+    projects, defining endpoints, resetting collections between test runs. Mock traffic under
+    <code class="rounded bg-slate-100 px-1 py-0.5">/m/{project}/</code> needs no token and
+    never accepts one.
+  </p>
+</div>
+
+{{ with .Form }}
+  {{ if .Created }}
+    <div class="mt-6 rounded-lg border border-emerald-300 bg-emerald-50 p-4">
+      <h2 class="font-medium text-emerald-900">Here is {{ .CreatedName }} — copy it now</h2>
+      <p class="mt-1 text-sm text-emerald-800">
+        This is the only time it is shown. Only its hash is stored, so it cannot be looked up
+        again; if it is lost, revoke it and make another.
+      </p>
+      <pre class="mt-3 overflow-x-auto rounded-md bg-white p-3 font-mono text-sm text-slate-900 select-all">{{ .Created }}</pre>
+      <p class="mt-3 text-xs font-medium uppercase tracking-wide text-emerald-800">Try it</p>
+      <pre class="mt-1 overflow-x-auto rounded-md bg-white p-3 font-mono text-xs text-slate-700 select-all">{{ .Example }}</pre>
+    </div>
+  {{ end }}
+
+  <div class="mt-6 rounded-lg border border-slate-200 bg-white p-4">
+    <h2 class="text-sm font-medium text-slate-700">New token</h2>
+    <form method="post" action="/tokens" class="mt-3 flex flex-wrap items-start gap-3">
+      {{ template "csrf" $ }}
+
+      <div class="min-w-56 flex-1">
+        <label for="name" class="block text-sm font-medium text-slate-700">Name</label>
+        <input type="text" id="name" name="name" value="{{ .Name }}" required maxlength="80"
+               placeholder="ci"
+               class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none">
+        {{ template "fieldError" (index $.Errors "name") }}
+        <p class="mt-1 text-xs text-slate-500">What it is for, so you know which one to revoke.</p>
+      </div>
+
+      <div class="w-40">
+        <label for="expires_in_days" class="block text-sm font-medium text-slate-700">Expires in</label>
+        <input type="number" id="expires_in_days" name="expires_in_days" min="0" max="3650"
+               value="{{ .ExpiresInDays }}" placeholder="days"
+               class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none">
+        {{ template "fieldError" (index $.Errors "expires_in_days") }}
+        <p class="mt-1 text-xs text-slate-500">Days. Empty for no expiry.</p>
+      </div>
+
+      <div class="pt-6">
+        <button type="submit"
+                class="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
+          Create token
+        </button>
+      </div>
+    </form>
+  </div>
+
+  {{ if .Any }}
+    <div class="mt-8 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <table class="w-full text-sm">
+        <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th class="px-4 py-2 font-medium">Name</th>
+            <th class="px-4 py-2 font-medium">Token</th>
+            <th class="px-4 py-2 font-medium">Created</th>
+            <th class="px-4 py-2 font-medium">Last used</th>
+            <th class="px-4 py-2 font-medium">Expires</th>
+            <th class="px-4 py-2"><span class="sr-only">Revoke</span></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {{ range .Tokens }}
+            <tr class="{{ if .Expired }}bg-slate-50 text-slate-400{{ end }}">
+              <td class="px-4 py-2 break-all">{{ .Name }}</td>
+              <td class="px-4 py-2 font-mono text-xs">{{ .Prefix }}…</td>
+              <td class="px-4 py-2 whitespace-nowrap">{{ .CreatedAt.Format "2 Jan 2006" }}</td>
+              <td class="px-4 py-2 whitespace-nowrap">
+                {{ if .Used }}{{ .LastUsedAt.Format "2 Jan 2006 15:04" }}{{ else }}<span class="text-slate-400">never</span>{{ end }}
+              </td>
+              <td class="px-4 py-2 whitespace-nowrap">
+                {{ if .Expired }}
+                  <span class="rounded bg-slate-200 px-1.5 py-0.5 text-xs font-medium text-slate-600">expired</span>
+                {{ else if .Expires }}
+                  {{ .ExpiresAt.Format "2 Jan 2006" }}
+                {{ else }}
+                  <span class="text-slate-400">never</span>
+                {{ end }}
+              </td>
+              <td class="px-4 py-2 text-right">
+                <form method="post" action="/tokens/{{ .ID }}/delete"
+                      hx-post="/tokens/{{ .ID }}/delete"
+                      hx-confirm="Revoke {{ .Name }}? Anything using it stops working immediately.">
+                  {{ template "csrf" $ }}
+                  <button type="submit" class="text-red-700 underline-offset-2 hover:text-red-900 hover:underline">
+                    Revoke
+                  </button>
+                </form>
+              </td>
+            </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="mt-3 text-xs text-slate-500">
+      Only the prefix is kept — the rest of a token exists nowhere after it is shown. Revoking
+      one takes effect on the next request that carries it.
+    </p>
+  {{ else }}
+    <div class="mt-8 rounded-lg border border-dashed border-slate-300 bg-white p-6">
+      <h3 class="font-medium text-slate-900">No tokens yet</h3>
+      <p class="mt-1 text-sm text-slate-600">
+        Create one above, then send it as
+        <code class="rounded bg-slate-100 px-1 py-0.5">Authorization: Bearer …</code>. A good
+        first call is <code class="rounded bg-slate-100 px-1 py-0.5">GET {{ $.BaseURL }}/api/v1/</code>,
+        which changes nothing and says which account the token resolved to.
+      </p>
+    </div>
+  {{ end }}
+{{ end }}
+{{ end }}

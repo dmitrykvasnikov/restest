@@ -22,16 +22,31 @@ var probeMethods = []string{
 // is asked directly — would this path answer a different method? — and the
 // distinction between "no such page" and "not that way" is preserved, now with
 // the application's own page rather than a line of plain text.
+// A path under /api/v1/ is answered in JSON, whichever of the two it turns out
+// to be. A caller that has been sending JSON has no use for a page of HTML, and
+// "this address answers PATCH" is exactly the kind of thing a script gets wrong
+// and needs told.
 func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
 	if allowed := s.allowedMethods(r); len(allowed) > 0 {
 		list := strings.Join(allowed, ", ")
 		w.Header().Set("Allow", list)
+
+		if isAPIPath(r) {
+			s.apiError(w, r, http.StatusMethodNotAllowed,
+				"this address answers %s, not %s", list, r.Method)
+			return
+		}
 		s.renderMessage(w, r, http.StatusMethodNotAllowed,
 			"Not that way",
 			fmt.Sprintf("This address answers %s, not %s.", list, r.Method))
 		return
 	}
 
+	if isAPIPath(r) {
+		s.apiError(w, r, http.StatusNotFound,
+			"no such route — GET %s lists what there is", pathAPIPrefix)
+		return
+	}
 	s.renderMessage(w, r, http.StatusNotFound,
 		"No such page",
 		"The address does not exist here. Check the link, or start again from your projects.")

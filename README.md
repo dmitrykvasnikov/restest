@@ -13,16 +13,20 @@ Single Go binary, PostgreSQL, server-rendered HTML. No npm in the toolchain, no 
 
 ## Project status
 
-**Milestones M0 through M5 are done.** The mock server works, it holds state, and it writes down
+**Milestones M0 through M6 are done.** The mock server works, it holds state, and it writes down
 what passed through it: define an endpoint or a collection in the web interface and it answers
 `curl` immediately, with no restart and no deploy. `POST` a record and the next `GET` returns it.
 Every mock request lands in a per-project log that tails live in the browser, so what a client
-actually sent is visible as it arrives. And there is something to try before any of that: a
-shared demo project at `/m/demo/…` answers with no account at all. Programmatic configuration —
-API tokens and the rest of `/api/v1/` — is the next milestone.
+actually sent is visible as it arrives. **And none of it needs the browser**: an API token
+reaches the whole of `/api/v1/`, so a CI job can create a project, define its endpoints, read the
+log and reset state between runs. There is also something to try before any of that: a shared
+demo project at `/m/demo/…` answers with no account at all.
 
 ```sh
 curl localhost:8080/m/demo/users        # eight users, no account, no token
+
+# and with a token, the same mocks are configurable from a script
+curl -H "Authorization: Bearer $RESTEST_TOKEN" localhost:8080/api/v1/
 ```
 
 | Milestone | Subject | Status |
@@ -33,8 +37,8 @@ curl localhost:8080/m/demo/users        # eight users, no account, no token
 | M3 | Stateful collections: CRUD over stored documents, filters, reset to seed | **done** |
 | M4 | Request log and inspector: recording, live tail over SSE, retention | **done** |
 | M5 | Public datasets and the demo project at `/m/demo/…` | **done** |
-| M6 | API tokens and management API | next |
-| M7 | Hardening: rate limits, CSP, metrics, backups | planned |
+| M6 | API tokens and the management API at `/api/v1/` | **done** |
+| M7 | Hardening: rate limits, CSP, metrics, backups | next |
 
 `PLAN.md` holds the full milestone list and each one's "done when" condition.
 
@@ -60,7 +64,8 @@ curl localhost:8080/m/demo/users        # eight users, no account, no token
 - **Listing queries**: `_page`, `_limit`, `_sort`, `_order`, and any `field=value` filter, served
   by the GIN index on the document body. `X-Total-Count` says how many matched.
 - **Reset to seed**, as a button in the interface and at
-  `POST /api/v1/projects/{slug}/collections/{name}/reset` — see the limitation below.
+  `POST /api/v1/projects/{slug}/collections/{name}/reset`, which a test suite can call with a
+  token between runs.
 - **The request log.** Every request to `/m/{slug}/…` is recorded — method, path, query, headers,
   bodies, status, duration and remote address — including the ones nothing matched, which are
   usually the interesting ones. Recording happens off the request path: the exchange goes to a
@@ -84,25 +89,34 @@ curl localhost:8080/m/demo/users        # eight users, no account, no token
   next `GET` — and every collection is restored to its seed hourly, so the next visitor finds
   it as you did. It belongs to an account with a random discarded password, so it is in
   nobody's project list and nobody can edit it.
+- **API tokens**, created at `/tokens`. The plaintext is shown once and never again — the row
+  holds its SHA-256 and a short prefix, so a lost token is revoked and replaced rather than
+  looked up. Optional expiry in days; revocation takes effect on the next request. The page
+  shows when each was last used, which is how a token nobody needs any more becomes visible.
+- **The management API at `/api/v1/`**, taking either the session cookie or
+  `Authorization: Bearer …`: projects, endpoints, collections, reset and the request log. It is
+  the same code the interface runs, so validation and ownership scoping are identical, and an
+  endpoint defined by a script answers the next request with no restart.
+  `GET /api/v1/` lists the routes and names the account a token resolved to, which is the
+  cheapest way to check a credential.
+- **A request that presents a token is authenticated by that token alone**, never falling back
+  to the session — which is what makes those requests safe to exempt from CSRF while the cookie
+  stays guarded.
 - Health probes, embedded and content-hashed static assets, structured JSON logs with a request
   id, graceful shutdown, migrations applied at startup.
 
 ### What does not work yet
 
-- **The reset route is not scriptable yet.** `/api/v1/` authenticates with the session cookie and
-  is guarded by CSRF, so the button in the interface works and a shell script does not. Exempting
-  a cookie-authenticated mutating route from CSRF is the hole the guard exists to close; a bearer
-  token is not a cookie and needs no exemption, so **M6 is what makes this route scriptable — at
-  the same URL.**
-- **The request log has no search and no filters.** It is a list newest-first with a detail view;
-  finding one request among a thousand means paging. Filtering by status, method or path is the
-  obvious next thing and is not built.
-- **The log is not exposed over the API**, so it can be read in a browser and not from a script.
-  It joins the rest of `/api/v1/` in M6.
+- **The request log has no search and no filters.** It is a list newest-first with a detail view,
+  in the browser and over the API alike; finding one request among a thousand means paging.
+  Filtering by status, method or path is the obvious next thing and is not built.
+- **A token is exactly as powerful as the account that made it.** There is no per-project scope
+  and no read-only token, so a token leaked from a CI job can reach every project that account
+  owns. Revoking it is immediate, which is the mitigation there is.
+- **No route mints a token.** Tokens are created and revoked in the interface only — deliberately,
+  so that a leaked token cannot be used to make a permanent replacement for itself.
 - **Requests to an unknown project slug are not recorded** — there is no project whose log they
   would belong to. They are in the process log, not the inspector.
-- No API tokens and nothing else under `/api/v1/`. The schema exists in migration `00001`; the
-  code does not.
 - **Datasets can only be chosen when a project is created.** Adding one to a project that
   already exists means creating the collection and its endpoint by hand — the seed of a
   built-in dataset is not offered from the collection form.
@@ -111,8 +125,10 @@ curl localhost:8080/m/demo/users        # eight users, no account, no token
   in and open it.
 - **No state isolation.** Collections hold one set of documents per project, so two parallel CI
   runs against one project interfere. `DESIGN.md` §12.1 has the additive path.
-- No password reset, no account deletion in the UI, no rate limiting, no CSP, and no CORS headers
-  by default — though an endpoint can set its own response headers, including
+- **No rate limiting anywhere**, on mock traffic or on `/api/v1/`, so a token that leaks is
+  bounded by nothing but the database. That is M7's, along with the rest of the hardening.
+- No password reset, no account deletion in the UI, no CSP, and no CORS headers by default —
+  though an endpoint can set its own response headers, including
   `Access-Control-Allow-Origin`, and they apply to collection responses too. Reset needs a mail
   decision; the rest is M7.
 
@@ -166,7 +182,7 @@ does **not** read `.env` — compose does, the Makefile does not.
 
 ## What you can do right now
 
-A complete pass through everything M0 to M5 deliver.
+A complete pass through everything M0 to M6 deliver.
 
 **Before anything else**, with the stack up and no account at all:
 
@@ -226,7 +242,12 @@ Set `RESTEST_DEMO_ENABLED=false` on an instance that should not serve it.
     and remote address. Requests nothing matched are there too, marked as unmatched, which is
     usually what you opened the log to find out. Bodies over 64 KiB are shown truncated and
     labelled; `Authorization` and `Cookie` values were redacted before they were stored.
-11. Log out, log back in — with a differently-cased address, which works, because the email column
+11. **API tokens**, from the link in the header. Name one — `ci`, say — and optionally give it a
+    number of days to live. The plaintext is shown once, on the page that created it, with a
+    `curl` line ready to paste; reload and it is gone for good, because only its hash was kept.
+    The table lists each token by its prefix with when it was created, when it was last used and
+    when it expires. **Revoke** takes effect on the next request that carries it.
+12. Log out, log back in — with a differently-cased address, which works, because the email column
     is `citext`.
 
 The endpoint form shows the fields for the kind you chose and hides the other set. With JavaScript
@@ -314,13 +335,53 @@ curl -sD- 'localhost:8080/m/checkout/users' -o /dev/null | grep -i x-total-count
   through equal values returns each document exactly once.
 - Request bodies are capped at 1 MiB; a body that is not a JSON object is a 400.
 
-Reset from the interface, or — once M6 lands and this route takes bearer tokens — from a test
-suite:
+**With curl — the management API.** Everything the interface does to a project, a script can do
+too. Create a token at `/tokens` in the browser, copy it the once it is shown, and export it:
 
 ```sh
-curl -X POST localhost:8080/api/v1/projects/checkout/collections/users/reset
-# {"project":"checkout","collection":"users","documents":2}
+export T=rst_…                                   # shown once, at /tokens
+export B=http://localhost:8080
+A() { curl -sH "Authorization: Bearer $T" -H 'Content-Type: application/json' "$@"; }
+
+A $B/api/v1/                                      # who you are, and what there is to call
+# {"user":"sam@example.com","authenticated_by":"token","routes":[…]}
+
+A -X POST $B/api/v1/projects -d '{"slug":"ci","name":"CI fixtures"}'
+A -X POST $B/api/v1/projects/ci/collections \
+     -d '{"name":"users","seed":[{"id":1,"name":"Ada"}]}'
+A -X POST $B/api/v1/projects/ci/endpoints \
+     -d '{"path":"/users","collection":"users"}'   # kind is inferred from `collection`
+A -X POST $B/api/v1/projects/ci/endpoints \
+     -d '{"method":"GET","path":"/health","status_code":200,"body":"{\"ok\":true}"}'
+
+curl $B/m/ci/users                                # already answering, no restart
+curl -X POST $B/m/ci/users -d '{"name":"Grace"}'  # a test run writes to it
+
+A -X POST $B/api/v1/projects/ci/collections/users/reset
+# {"project":"ci","collection":"users","documents":1}
+
+A $B/api/v1/projects/ci/log                       # what the client actually sent
+A -X DELETE $B/api/v1/projects/ci                 # 204, and /m/ci/ stops answering
 ```
+
+Worth knowing:
+
+- **A token is not a cookie**, so these calls need no CSRF token and no session. A request that
+  presents a token is authenticated by it alone and never falls back to a session, even if the
+  caller has one — which is what makes the exemption safe.
+- **Projects and collections take `PATCH`**, and an absent field keeps its current value.
+  **Endpoints take `PUT`** with the whole definition, because `kind` decides which of the other
+  fields mean anything.
+- **Unknown JSON fields are refused**, not ignored: `{"slugg":"ci"}` is a 400 naming the field,
+  because a misspelling that is silently dropped looks exactly like one that worked.
+- A rejected definition is a `422` carrying the same per-field messages the forms show:
+  `{"error":"…","fields":{"slug":"That slug is taken. Pick another one."}}`.
+- A project is addressed by slug, a collection by name, an endpoint by the id its creation
+  returned. Everything under `/api/v1/` is scoped to the account the credential belongs to, so
+  another account's project is the same 404 as one that never existed.
+- The log is read-only, pages with `?before=<cursor>` following the `next` field, and takes
+  `?limit=` up to 500. A body that is not valid UTF-8 comes back as
+  `{"text":null,"bytes":…,"binary":true}` rather than mangled.
 
 **The probes**, which are the only other endpoints that need no session:
 
@@ -351,12 +412,33 @@ logout form and the page's own form — so a scraper wants the right one.
 | `/projects/{slug}/log` | GET | **working** — the request log, newest first, `?before=` to page back |
 | `/projects/{slug}/log/stream` | GET | **working** — the live tail, `text/event-stream`, `?after=` to resume |
 | `/projects/{slug}/log/{id}` | GET | **working** — one exchange in full |
+| `/tokens` | GET, POST | **working** — API tokens; the plaintext is shown once, on the page that created it |
+| `/tokens/{id}/delete` | POST | **working** — revoke, effective on the next request |
 | `/healthz`, `/readyz` | GET | working, no session |
 | `/static/…` | GET | embedded assets, content-hashed, cached immutably |
-| `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF |
+| `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF, no token |
 | `/m/demo/…` | any | **working** — the shared demo project, the same handler as any other slug |
-| `/api/v1/projects/{slug}/collections/{name}/reset` | POST | **working** — session cookie and CSRF today, bearer tokens in M6 |
-| the rest of `/api/v1/…` | any | **M6 — not routed yet** |
+
+Everything below takes **either** the session cookie **or** `Authorization: Bearer …`, and a
+request that presents a token needs no CSRF token:
+
+| Path | Method | Status |
+|---|---|---|
+| `/api/v1/` | GET | **working** — the account, how it was proved, and the route list |
+| `/api/v1/projects` | GET, POST | **working** — list, create (with `datasets` to pre-seed) |
+| `/api/v1/projects/{slug}` | GET, PATCH, DELETE | **working** |
+| `/api/v1/projects/{slug}/endpoints` | GET, POST | **working** |
+| `/api/v1/projects/{slug}/endpoints/{id}` | GET, PUT, DELETE | **working** — `PUT` is the whole definition |
+| `/api/v1/projects/{slug}/collections` | GET, POST | **working** |
+| `/api/v1/projects/{slug}/collections/{name}` | GET, PATCH, DELETE | **working** |
+| `/api/v1/projects/{slug}/collections/{name}/reset` | POST | **working** — the URL M3 shipped, now scriptable |
+| `/api/v1/projects/{slug}/log` | GET | **working** — `?before=` to page, `?limit=` up to 500 |
+| `/api/v1/projects/{slug}/log/{id}` | GET | **working** — headers and bodies as recorded |
+
+Tokens themselves are not in the API: they are minted and revoked at `/tokens` only, so that a
+leaked token cannot be used to make a permanent replacement for itself. A refusal from any
+`/api/v1/` route is JSON, including the 404 and the 405 — a script that has been parsing JSON
+should not be handed a page of HTML.
 
 Anything unmatched renders the application's own 404 page, and a path that exists under a
 different verb returns 405 with an `Allow` header rather than a misleading 404.
@@ -459,11 +541,25 @@ not exist creates nothing at all, because it is one transaction; provisioning th
 produces one project, one set of collections and one account; and provisioning refuses to adopt
 a project holding the demo slug that is not the demo.
 
-`TestTheM2Milestone` through `TestTheM5Milestone` walk each milestone end to end: define it in
+API tokens are tested at both levels too. Unit tests cover the token format — the `rst_` mark,
+32 random bytes of raw URL-safe base64, no character that needs quoting in a shell — that the
+prefix identifies a token without giving much of it away, that hashing is stable and carries no
+plaintext, and that a malformed credential is refused before the database is asked at all.
+Handler tests mint a token through the real form and then present it: a mutating call with a
+token and no CSRF token is accepted, the same call with a *bad* token is refused rather than
+falling back to the logged-in session, the session on its own is still guarded, and a revoked
+token stops working. Against real Postgres: the hash in the row is the hash of the token that
+was issued, `last_used_at` is written by the statement that authenticates, an expired token is
+refused *and* not marked used, and a token reaches its own account's projects and nothing else.
+
+`TestTheM2Milestone` through `TestTheM6Milestone` walk each milestone end to end: define it in
 the form, `curl` it, and — for M3 — post, fetch, filter, delete and reset; for M4, open the SSE
 stream, send a request, and read the row off the wire; for M5, read and write the demo from a
 client with no cookies at all, reset it, and watch the visitor's document disappear and the
-identifier counter go back with it.
+identifier counter go back with it. M6 is the whole of it from a script: register, mint a token,
+then create a project, a collection and two endpoints over `/api/v1/` with no cookie jar at all,
+call the mock URLs they created, write to one, reset it, read the request log back through the
+API, and delete the project — after which `/m/ci/` stops answering.
 
 ## Repository layout
 
@@ -473,14 +569,15 @@ internal/
   config/             environment configuration, validated at startup
   logging/            slog handler construction
   database/           pgx pool, migration run
-  core/               domain logic: users, projects, endpoints, collections, documents,
-                      the built-in datasets and the demo project, the exchange recorder
-                      and log partition maintenance
+  core/               domain logic: users, API tokens, projects, endpoints, collections,
+                      documents, the built-in datasets and the demo project, the exchange
+                      recorder and log partition maintenance
     queries/          hand-written SQL, input to sqlc
     datasets/         the built-in dataset seeds, embedded JSON
     dbgen/            sqlc output — generated, never edited
   mock/               inbound: the radix trie, the router, route expansion, suggestions
-  web/                handlers, middleware, sessions, CSRF, the mock and collection handlers
+  web/                handlers, middleware, sessions, CSRF, bearer authentication,
+                      the mock and collection handlers, and /api/v1/ (api*.go)
     templates/        Go templates, embedded
     static/           generated CSS and vendored JS and CodeMirror, embedded
   integration/        tests needing a real Postgres, behind a build tag
@@ -490,8 +587,8 @@ notes/                session history, append-only
 
 Business logic stays out of the HTTP handlers, so the phase 2 runner can drive the same logic from
 a background worker with no request in sight. Validation lives in `core` and returns errors keyed
-by form field, so the management API in M6 enforces the same rules as the browser forms rather
-than a second copy of them. `internal/mock` speaks no HTTP at all — it takes a method and a path
+by form field, so the management API enforces the same rules as the browser forms rather
+than a second copy of them — every `/api/v1/` handler calls the core method its page calls. `internal/mock` speaks no HTTP at all — it takes a method and a path
 and returns a decision, which is what lets it be tested as a table rather than through a server.
 
 Most SQL is generated by sqlc from `internal/core/queries/`. The document statements are the

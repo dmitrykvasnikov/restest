@@ -3,7 +3,6 @@ package web
 import (
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/justinas/nosurf"
 )
@@ -36,10 +35,23 @@ func (s *Server) withCSRF(next http.Handler) http.Handler {
 	// the scheme of the configured base URL — not from r.TLS.
 	h.SetIsTLSFunc(func(*http.Request) bool { return s.secure })
 
-	// A request that matched no route has nothing to protect, and answering it
-	// with "your form expired" would be a worse answer than the 404 or 405 it
-	// has actually earned.
 	h.ExemptFunc(func(r *http.Request) bool {
+		// A request to the management API that presents a bearer token is
+		// authenticated by that token alone and never by the session, so there
+		// is no ambient credential for a third-party page to abuse — and it
+		// could not set the header in the first place without a preflight it
+		// will not be granted. Exempting it is what makes /api/v1/ scriptable
+		// without opening the hole that exempting a cookie-authenticated route
+		// would (DESIGN.md §5.1, apiauth.go).
+		if isAPIPath(r) {
+			if _, ok := bearerToken(r); ok {
+				return true
+			}
+		}
+
+		// A request that matched no route has nothing to protect, and answering
+		// it with "your form expired" would be a worse answer than the 404 or
+		// 405 it has actually earned.
 		_, pattern := s.mux.Handler(r)
 		return pattern == patternCatchAll
 	})
@@ -62,9 +74,9 @@ func (s *Server) handleCSRFFailure(w http.ResponseWriter, r *http.Request) {
 		slog.String("reason", nosurf.Reason(r).Error()),
 	)
 
-	if strings.HasPrefix(r.URL.Path, pathAPIPrefix) {
+	if isAPIPath(r) {
 		writeJSON(w, r, http.StatusBadRequest, errorBody{
-			Error: "this request carried no CSRF token; /api/v1/ takes the session cookie and a token today, and bearer tokens once M6 lands",
+			Error: "this request carried no CSRF token; send an API token as `Authorization: Bearer …` instead of the session cookie",
 		})
 		return
 	}

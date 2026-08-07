@@ -38,6 +38,14 @@ type Store interface {
 	Authenticate(ctx context.Context, email, password string) (core.User, error)
 	UserByID(ctx context.Context, id uuid.UUID) (core.User, error)
 
+	// API tokens. CreateAPIToken returns the plaintext as its second value,
+	// which is the only time it exists: the row holds a SHA-256, so nothing
+	// can produce it again.
+	CreateAPIToken(ctx context.Context, userID uuid.UUID, in core.APITokenInput) (core.APIToken, string, error)
+	APITokensByUser(ctx context.Context, userID uuid.UUID) ([]core.APIToken, error)
+	DeleteAPIToken(ctx context.Context, userID, id uuid.UUID) error
+	AuthenticateAPIToken(ctx context.Context, presented string) (core.User, core.APIToken, error)
+
 	CreateProject(ctx context.Context, ownerID uuid.UUID, slug, name string, datasets []string) (core.Project, error)
 	ProjectsByOwner(ctx context.Context, ownerID uuid.UUID) ([]core.Project, error)
 	ProjectByOwnerAndSlug(ctx context.Context, ownerID uuid.UUID, slug string) (core.Project, error)
@@ -235,9 +243,41 @@ func (s *Server) routes() {
 	s.mux.Handle("GET "+pathLogStream, s.requireUser(s.handleLogStream))
 	s.mux.Handle("GET "+pathLogEntry, s.requireUser(s.handleLogEntry))
 
-	// The management API. One route so far; see api.go for why it is
-	// session-authenticated and what M6 changes about that.
-	s.mux.Handle("POST "+pathAPIReset, s.requireUserAPI(s.handleCollectionReset))
+	// API tokens. In the interface and not in the API: a token that could mint
+	// tokens would turn one leaked CI credential into a permanent foothold, and
+	// the account that established the trust is the one that should extend it.
+	s.mux.Handle("GET "+pathTokens, s.requireUser(s.handleTokenList))
+	s.mux.Handle("POST "+pathTokens, s.requireUser(s.handleTokenCreate))
+	s.mux.Handle("POST "+pathTokenDelete, s.requireUser(s.handleTokenDelete))
+
+	// The management API. Every route takes either the session cookie or an
+	// `Authorization: Bearer` token — see apiauth.go for why presenting a token
+	// is what exempts a request from the CSRF guard.
+	s.mux.Handle("GET "+pathAPIRoot, s.requireAPIUser(s.handleAPIIndex))
+
+	s.mux.Handle("GET "+pathAPIProjects, s.requireAPIUser(s.handleAPIProjectList))
+	s.mux.Handle("POST "+pathAPIProjects, s.requireAPIUser(s.handleAPIProjectCreate))
+	s.mux.Handle("GET "+pathAPIProject, s.requireAPIUser(s.handleAPIProjectShow))
+	s.mux.Handle("PATCH "+pathAPIProject, s.requireAPIUser(s.handleAPIProjectUpdate))
+	s.mux.Handle("DELETE "+pathAPIProject, s.requireAPIUser(s.handleAPIProjectDelete))
+
+	s.mux.Handle("GET "+pathAPIEndpoints, s.requireAPIUser(s.handleAPIEndpointList))
+	s.mux.Handle("POST "+pathAPIEndpoints, s.requireAPIUser(s.handleAPIEndpointCreate))
+	s.mux.Handle("GET "+pathAPIEndpoint, s.requireAPIUser(s.handleAPIEndpointShow))
+	s.mux.Handle("PUT "+pathAPIEndpoint, s.requireAPIUser(s.handleAPIEndpointUpdate))
+	s.mux.Handle("DELETE "+pathAPIEndpoint, s.requireAPIUser(s.handleAPIEndpointDelete))
+
+	s.mux.Handle("GET "+pathAPICollections, s.requireAPIUser(s.handleAPICollectionList))
+	s.mux.Handle("POST "+pathAPICollections, s.requireAPIUser(s.handleAPICollectionCreate))
+	s.mux.Handle("GET "+pathAPICollection, s.requireAPIUser(s.handleAPICollectionShow))
+	s.mux.Handle("PATCH "+pathAPICollection, s.requireAPIUser(s.handleAPICollectionUpdate))
+	s.mux.Handle("DELETE "+pathAPICollection, s.requireAPIUser(s.handleAPICollectionDelete))
+	// The reset route is unchanged from M3, at the URL it has always had. What
+	// M6 added is a credential it can be called with (DESIGN.md §5.1).
+	s.mux.Handle("POST "+pathAPIReset, s.requireAPIUser(s.handleCollectionReset))
+
+	s.mux.Handle("GET "+pathAPILog, s.requireAPIUser(s.handleAPILogList))
+	s.mux.Handle("GET "+pathAPILogEntry, s.requireAPIUser(s.handleAPILogEntry))
 
 	// Mock traffic. Registered without a method, because which verbs answer is
 	// the project's decision and not this router's, and skipped by the session
@@ -301,6 +341,11 @@ func isUnsessioned(pattern string) bool {
 // rather than making a caller parse two different error formats.
 type errorBody struct {
 	Error string `json:"error"`
+	// Fields carries per-field messages when what was refused was a definition
+	// rather than the request itself — the same messages the forms show beside
+	// the field. It is absent otherwise, so a caller that reads only `error` is
+	// never surprised by it.
+	Fields core.FieldErrors `json:"fields,omitempty"`
 }
 
 // writeJSON sends v with the given status. A body that fails to encode is

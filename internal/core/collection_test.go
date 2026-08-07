@@ -198,6 +198,10 @@ func TestCollectionInputValidation(t *testing.T) {
 		{name: "uuid is a strategy", in: with(valid, func(c *CollectionInput) { c.IDStrategy = IDUUID })},
 		{name: "the seed has to be JSON", in: with(valid, func(c *CollectionInput) { c.Seed = "{" }), field: "seed"},
 		{name: "the seed has to be an array", in: with(valid, func(c *CollectionInput) { c.Seed = `{"id":1}` }), field: "seed"},
+		// A JSON null decodes into a slice without being an array, so it would
+		// otherwise reach the column and be refused by a check constraint —
+		// a 500 where a sentence beside the field belongs.
+		{name: "and null is not one", in: with(valid, func(c *CollectionInput) { c.Seed = "null" }), field: "seed"},
 		{name: "of objects", in: with(valid, func(c *CollectionInput) { c.Seed = `[1,2]` }), field: "seed"},
 		{name: "an array of objects is the point", in: with(valid, func(c *CollectionInput) { c.Seed = `[{"id":1}]` })},
 	}
