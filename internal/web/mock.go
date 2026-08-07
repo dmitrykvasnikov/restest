@@ -58,6 +58,11 @@ func (s *Server) handleMock(w http.ResponseWriter, r *http.Request) {
 
 	result := s.matcher.Lookup(slug, r.Method, path)
 
+	// Which project this belongs to, and whether anything answered, is known
+	// here and nowhere else. The recording middleware reads it back after this
+	// handler returns; with recording off the call does nothing.
+	noteExchange(r.Context(), result)
+
 	switch result.Outcome {
 	case mock.Matched:
 		// A static endpoint writes what it was given; a collection route reads

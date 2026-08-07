@@ -69,6 +69,15 @@ type Store interface {
 	ReplaceDocument(ctx context.Context, collectionID uuid.UUID, publicID string, body []byte) (core.Document, error)
 	PatchDocument(ctx context.Context, collectionID uuid.UUID, publicID string, body []byte) (core.Document, error)
 	DeleteDocument(ctx context.Context, collectionID uuid.UUID, publicID string) error
+
+	// The request log. Like the document operations these take a project id and
+	// no owner: the handler has already resolved the project through
+	// ProjectByOwnerAndSlug, which is where the ownership check lives, because
+	// the exchanges table carries no owner of its own (queries/exchanges.sql).
+	ExchangesByProject(ctx context.Context, projectID uuid.UUID, before core.ExchangeCursor, limit int) ([]core.Exchange, error)
+	ExchangesSince(ctx context.Context, projectID uuid.UUID, after core.ExchangeCursor, limit int) ([]core.Exchange, error)
+	ExchangeByID(ctx context.Context, projectID, id uuid.UUID) (core.Exchange, error)
+	LatestExchangeCursor(ctx context.Context, projectID uuid.UUID) (core.ExchangeCursor, error)
 }
 
 // Options are the dependencies of a Server. A struct rather than a parameter
@@ -88,6 +97,17 @@ type Options struct {
 	// BaseURL is the address users reach this instance on, shown in the UI as
 	// the root of their mock URLs.
 	BaseURL string
+	// Recorder takes the exchanges the mock server produces. Optional: without
+	// one nothing is recorded and the inspector says so, which is what the
+	// handler tests run with.
+	Recorder Recorder
+	// LogBodyLimit is how much of a body the recording middleware keeps. Zero
+	// falls back to defaultLogBodyLimit.
+	LogBodyLimit int
+	// LogRetentionMonths is how long the log is kept. The inspector says so on
+	// the page, because "where did last quarter go" is a question worth
+	// answering before it is asked.
+	LogRetentionMonths int
 }
 
 // Server carries the dependencies shared by all handlers.
@@ -101,7 +121,16 @@ type Server struct {
 	baseURL      string
 	assetVersion string
 	secure       bool
+	recorder     Recorder
+	logBodyLimit int
+
+	logRetentionMonths int
 }
+
+// defaultLogBodyLimit is how much of a body is recorded when the caller did not
+// say. It matches the default of RESTEST_LOG_BODY_LIMIT, so a Server built by
+// hand behaves like the one main.go builds.
+const defaultLogBodyLimit = 64 * 1024
 
 // New returns a Server with its routes and templates ready. Templates are
 // parsed here rather than on first use, so a broken template stops the process
@@ -119,6 +148,11 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 
+	limit := opts.LogBodyLimit
+	if limit <= 0 {
+		limit = defaultLogBodyLimit
+	}
+
 	s := &Server{
 		logger:       opts.Logger,
 		store:        opts.Store,
@@ -129,6 +163,10 @@ func New(opts Options) (*Server, error) {
 		baseURL:      strings.TrimRight(opts.BaseURL, "/"),
 		assetVersion: version,
 		secure:       opts.Sessions.Cookie.Secure,
+		recorder:     opts.Recorder,
+		logBodyLimit: limit,
+
+		logRetentionMonths: opts.LogRetentionMonths,
 	}
 	s.routes()
 	return s, nil
@@ -182,6 +220,14 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /projects/{slug}/collections/{id}", s.requireUser(s.handleCollectionUpdate))
 	s.mux.Handle("POST /projects/{slug}/collections/{id}/delete", s.requireUser(s.handleCollectionDelete))
 
+	// The request log. The stream is registered on a literal path below the
+	// list, and the detail view on a parameter beside it: a literal segment
+	// beats a wildcard in net/http's router too, so /log/stream cannot be read
+	// as an exchange id.
+	s.mux.Handle("GET "+pathLog, s.requireUser(s.handleLogList))
+	s.mux.Handle("GET "+pathLogStream, s.requireUser(s.handleLogStream))
+	s.mux.Handle("GET "+pathLogEntry, s.requireUser(s.handleLogEntry))
+
 	// The management API. One route so far; see api.go for why it is
 	// session-authenticated and what M6 changes about that.
 	s.mux.Handle("POST "+pathAPIReset, s.requireUserAPI(s.handleCollectionReset))
@@ -189,7 +235,10 @@ func (s *Server) routes() {
 	// Mock traffic. Registered without a method, because which verbs answer is
 	// the project's decision and not this router's, and skipped by the session
 	// and CSRF middleware — see isUnsessioned.
-	s.mux.HandleFunc(patternMock, s.handleMock)
+	//
+	// The recording middleware wraps this one route and nothing else: the log
+	// is of the traffic a project serves, not of somebody administering it.
+	s.mux.Handle(patternMock, s.recordExchanges(http.HandlerFunc(s.handleMock)))
 
 	// Anything else. Registered last and matched last: every pattern above is
 	// more specific, so this only sees paths nothing claimed.

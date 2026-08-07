@@ -1,0 +1,34 @@
+{{/* One line of the request log.
+
+     It is a partial rather than part of the list page because the live tail
+     renders it too: a row that arrives over the stream and one that arrives on
+     a refresh are then the same markup by construction, not by agreement.
+
+     Called with an exchangeRow, not with the page data — so it can be executed
+     on its own — which is why nothing in here reaches for $. */}}
+{{ define "exchange_row" }}
+<tr class="log-row {{ if not .Matched }}bg-amber-50{{ end }}">
+  <td class="px-4 py-2 font-mono text-xs whitespace-nowrap text-slate-500"
+      title="{{ .CreatedAt.UTC.Format "2006-01-02 15:04:05.000 MST" }}">
+    {{ .CreatedAt.UTC.Format "15:04:05" }}
+  </td>
+  <td class="px-4 py-2 font-mono text-xs font-semibold whitespace-nowrap">{{ .Method }}</td>
+  <td class="px-4 py-2 font-mono text-xs break-all">
+    <a href="{{ .DetailPath }}" class="underline-offset-2 hover:underline">{{ .Target }}</a>
+    {{ if not .Matched }}
+      <span class="ml-1 rounded bg-amber-200 px-1.5 py-0.5 text-xs font-medium text-amber-900">no match</span>
+    {{ end }}
+  </td>
+  <td class="px-4 py-2 tabular-nums">
+    <span class="rounded px-1.5 py-0.5 text-xs font-semibold
+      {{ if eq .Outcome "ok" }}bg-emerald-100 text-emerald-800
+      {{ else if eq .Outcome "server-error" }}bg-red-100 text-red-800
+      {{ else }}bg-amber-100 text-amber-900{{ end }}">{{ .StatusCode }}</span>
+  </td>
+  <td class="px-4 py-2 tabular-nums text-slate-500">{{ .DurationMS }} ms</td>
+  <td class="px-4 py-2 text-right">
+    <a href="{{ .DetailPath }}"
+       class="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline">Inspect</a>
+  </td>
+</tr>
+{{ end }}

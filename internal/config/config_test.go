@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dmitrykvasnikov/restest/internal/core"
 )
 
 // env builds a LookupFunc over a literal map, standing in for the process
@@ -47,6 +49,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 15*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 15s", cfg.ShutdownTimeout)
 	}
+	if cfg.LogBodyLimit != 64*1024 {
+		t.Errorf("LogBodyLimit = %d, want 65536", cfg.LogBodyLimit)
+	}
+	if cfg.LogBuffer != core.DefaultRecorderBuffer {
+		t.Errorf("LogBuffer = %d, want %d", cfg.LogBuffer, core.DefaultRecorderBuffer)
+	}
+	if cfg.LogRetentionMonths != core.DefaultRetentionMonths {
+		t.Errorf("LogRetentionMonths = %d, want %d", cfg.LogRetentionMonths, core.DefaultRetentionMonths)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -60,19 +71,27 @@ func TestLoadOverrides(t *testing.T) {
 		"RESTEST_LOG_LEVEL":          "debug",
 		"RESTEST_LOG_FORMAT":         "text",
 		"RESTEST_SHUTDOWN_TIMEOUT":   "30s",
+		// The request log: how much of a body is kept, how many exchanges may
+		// wait to be written, and how many months are kept.
+		"RESTEST_LOG_BODY_LIMIT":       "4096",
+		"RESTEST_LOG_BUFFER":           "64",
+		"RESTEST_LOG_RETENTION_MONTHS": "12",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
 	want := Config{
-		HTTPAddr:         "127.0.0.1:9000",
-		BaseURL:          "https://restest.example.com",
-		DatabaseURL:      "postgres://localhost/db",
-		DatabaseMaxConns: 42,
-		LogLevel:         slog.LevelDebug,
-		LogFormat:        "text",
-		ShutdownTimeout:  30 * time.Second,
+		HTTPAddr:           "127.0.0.1:9000",
+		BaseURL:            "https://restest.example.com",
+		DatabaseURL:        "postgres://localhost/db",
+		DatabaseMaxConns:   42,
+		LogLevel:           slog.LevelDebug,
+		LogFormat:          "text",
+		ShutdownTimeout:    30 * time.Second,
+		LogBodyLimit:       4096,
+		LogBuffer:          64,
+		LogRetentionMonths: 12,
 	}
 	if cfg != want {
 		t.Errorf("Load = %+v, want %+v", cfg, want)
@@ -143,6 +162,12 @@ func TestLoadInvalidValues(t *testing.T) {
 		{"unknown log format", "RESTEST_LOG_FORMAT", "xml"},
 		{"shutdown not a duration", "RESTEST_SHUTDOWN_TIMEOUT", "soon"},
 		{"shutdown not positive", "RESTEST_SHUTDOWN_TIMEOUT", "0s"},
+		// A body limit above the ceiling one row may cost, a buffer of nothing
+		// at all, and a retention window that would detach the month being
+		// written into.
+		{"body limit above the row ceiling", "RESTEST_LOG_BODY_LIMIT", "2097152"},
+		{"buffer of zero", "RESTEST_LOG_BUFFER", "0"},
+		{"retention below one month", "RESTEST_LOG_RETENTION_MONTHS", "0"},
 	}
 
 	for _, tt := range tests {

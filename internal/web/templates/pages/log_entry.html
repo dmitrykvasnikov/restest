@@ -1,0 +1,92 @@
+{{ define "content" }}
+{{ with .Form }}
+{{ $exchange := .Exchange }}
+
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight break-all">
+      <span class="font-mono">{{ $exchange.Method }}</span>
+      <span class="font-mono text-slate-600">{{ $exchange.Target }}</span>
+    </h1>
+    <p class="mt-1 text-sm text-slate-500">
+      {{ $exchange.CreatedAt.UTC.Format "2 January 2006, 15:04:05.000 MST" }}
+      · {{ $exchange.DurationMS }} ms
+      {{ if $exchange.RemoteAddr }}· from {{ $exchange.RemoteAddr }}{{ end }}
+    </p>
+  </div>
+  <a href="{{ .BackURL }}"
+     class="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+    Back to the log
+  </a>
+</div>
+
+<div class="mt-6 grid gap-4 sm:grid-cols-3">
+  <div class="rounded-lg border border-slate-200 bg-white p-4">
+    <h2 class="text-xs uppercase tracking-wide text-slate-500">Status</h2>
+    <p class="mt-1 text-lg font-semibold tabular-nums">
+      {{ if $exchange.StatusCode }}{{ $exchange.StatusCode }}{{ else }}—{{ end }}
+    </p>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-4">
+    <h2 class="text-xs uppercase tracking-wide text-slate-500">Matched an endpoint</h2>
+    <p class="mt-1 text-lg font-semibold">{{ if $exchange.Matched }}yes{{ else }}no{{ end }}</p>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-4">
+    <h2 class="text-xs uppercase tracking-wide text-slate-500">Direction</h2>
+    <p class="mt-1 text-lg font-semibold">{{ $exchange.Direction }}</p>
+  </div>
+</div>
+
+{{/* Request and response side by side on a wide screen, stacked on a narrow
+     one. The order is the order they happened. */}}
+<div class="mt-8 grid gap-8 lg:grid-cols-2">
+  <section>
+    <h2 class="text-lg font-semibold tracking-tight">Request</h2>
+    {{ template "header_table" $exchange.RequestHeaders }}
+    {{ template "body_block" .RequestBody }}
+  </section>
+
+  <section>
+    <h2 class="text-lg font-semibold tracking-tight">Response</h2>
+    {{ template "header_table" $exchange.ResponseHeaders }}
+    {{ template "body_block" .ResponseBody }}
+  </section>
+</div>
+{{ end }}
+{{ end }}
+
+{{/* Called with a core.HeaderSet. */}}
+{{ define "header_table" }}
+  {{ if .Len }}
+    <div class="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <table class="w-full text-sm">
+        <tbody class="divide-y divide-slate-100">
+          {{ $headers := . }}
+          {{ range .Names }}
+            <tr>
+              <td class="w-1/3 px-4 py-2 font-mono text-xs font-medium text-slate-600 align-top break-all">{{ . }}</td>
+              <td class="px-4 py-2 font-mono text-xs break-all">{{ $headers.Values . }}</td>
+            </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  {{ else }}
+    <p class="mt-3 text-sm text-slate-500">No headers recorded.</p>
+  {{ end }}
+{{ end }}
+
+{{/* Called with a bodyBlock: the text as it should be shown, and whether the
+     recording limit cut it short. */}}
+{{ define "body_block" }}
+  {{ if .Text }}
+    <pre class="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-900 p-4 text-xs text-slate-100"><code>{{ .Text }}</code></pre>
+    {{ if .Truncated }}
+      <p class="mt-2 text-xs text-amber-700">
+        Cut short at the recording limit — the client sent or received more than this.
+      </p>
+    {{ end }}
+  {{ else }}
+    <p class="mt-3 text-sm text-slate-500">No body.</p>
+  {{ end }}
+{{ end }}

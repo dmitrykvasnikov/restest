@@ -6,8 +6,8 @@ Written 2026-08-02, before any code.
 Milestones are sequenced so that each one ends at a state that can be demonstrated and, from
 M2 onward, is genuinely usable. Nothing here is a deadline; the ordering is the point.
 
-**Status (2026-08-04):** M0–M3 merged to master. M4 (request log and inspector) is next;
-see `notes/notes_04_1.md` § "Next step" for where to pick up.
+**Status (2026-08-07):** M0–M4 merged to master. M5 (public datasets and the demo project) is
+next; see `notes/notes_05_1.md` § "Next step" for where to pick up.
 
 ---
 
@@ -68,19 +68,27 @@ not after.
 **Known gap carried forward:** the reset route is session-authenticated and CSRF-guarded only —
 not yet scriptable without a browser session. M6 adds bearer-token auth at the same URL.
 
-## M4 — Request log and inspector ⬅ next up (feature 05, not started)
+## M4 — Request log and inspector ✅ done (feature/05-request-log)
 
-- [ ] Recording middleware wrapping the mock handler: captures request and response, truncating
+- [x] Recording middleware wrapping the mock handler: captures request and response, truncating
       bodies above a cap.
-- [ ] Writes go to a buffered channel drained by a batching writer, so logging never sits in the
-      request path. **The buffer must report drops rather than discard silently** — a log that
-      quietly loses entries is worse than no log.
-- [ ] Per-project list view, live-tailing over SSE; detail view of a single exchange.
-- [ ] Monthly partition creation job, and retention by detaching old partitions.
+- [x] Writes go to a buffered channel drained by a batching writer, so logging never sits in the
+      request path. **The buffer reports drops rather than discarding silently** — counted,
+      warned about in the process log, and shown on the inspector page.
+- [x] Per-project list view, live-tailing over SSE; detail view of a single exchange.
+- [x] Monthly partition creation job, and retention by detaching old partitions.
+- [x] Credentials redacted at capture rather than at display, so nothing that reaches the table
+      can be un-redacted later. Not on the original list; it belonged here.
 
 **Done when:** requests appear in the UI as they arrive, without a refresh.
 
-## M5 — Public datasets (not started)
+**Decisions that closed `DESIGN.md` §12.3:** 64 KiB per recorded body, three months of retention,
+both configurable. See §7.1 there for the reasoning.
+
+**Carried forward:** the log has no search or filters, and is not reachable over `/api/v1/`. The
+second lands with M6, which routes the rest of the API anyway.
+
+## M5 — Public datasets ⬅ next up (feature 06, not started)
 
 - [ ] Seed templates: `users`, `posts`, `comments`, `todos`.
 - [ ] New projects can be created pre-seeded from a template.
@@ -128,4 +136,5 @@ Carried from `DESIGN.md` §12. None block M0–M2.
 - **State isolation (§12.1)** lands in M3 if it is wanted early. The additive path is a nullable
   scope column on `documents` plus a client-supplied header; deciding late costs a migration but
   not a redesign.
-- Demo reset policy (§12.2) is needed by M5, retention window (§12.3) by M4.
+- Demo reset policy (§12.2) is needed by M5. The retention window and body cap (§12.3) were
+  settled by M4: three months and 64 KiB, both configurable.

@@ -13,10 +13,12 @@ Single Go binary, PostgreSQL, server-rendered HTML. No npm in the toolchain, no 
 
 ## Project status
 
-**Milestones M0 through M3 are done.** The mock server works and it holds state: define an
-endpoint or a collection in the web interface and it answers `curl` immediately, with no restart
-and no deploy. `POST` a record and the next `GET` returns it. Seeing what a client actually sent —
-the request log — is the next milestone.
+**Milestones M0 through M4 are done.** The mock server works, it holds state, and it writes down
+what passed through it: define an endpoint or a collection in the web interface and it answers
+`curl` immediately, with no restart and no deploy. `POST` a record and the next `GET` returns it.
+Every mock request lands in a per-project log that tails live in the browser, so what a client
+actually sent is visible as it arrives. Ready-made public datasets and a demo project reachable
+without an account are the next milestone.
 
 | Milestone | Subject | Status |
 |---|---|---|
@@ -24,8 +26,8 @@ the request log — is the next milestone.
 | M1 | Accounts and projects: Argon2id, sessions, CSRF, project CRUD | **done** |
 | M2 | Static mocks and the route matcher (`/m/{slug}/…`) | **done** |
 | M3 | Stateful collections: CRUD over stored documents, filters, reset to seed | **done** |
-| M4 | Request log and inspector | next |
-| M5 | Public datasets and the demo project | planned |
+| M4 | Request log and inspector: recording, live tail over SSE, retention | **done** |
+| M5 | Public datasets and the demo project | next |
 | M6 | API tokens and management API | planned |
 | M7 | Hardening: rate limits, CSP, metrics, backups | planned |
 
@@ -54,6 +56,20 @@ the request log — is the next milestone.
   by the GIN index on the document body. `X-Total-Count` says how many matched.
 - **Reset to seed**, as a button in the interface and at
   `POST /api/v1/projects/{slug}/collections/{name}/reset` — see the limitation below.
+- **The request log.** Every request to `/m/{slug}/…` is recorded — method, path, query, headers,
+  bodies, status, duration and remote address — including the ones nothing matched, which are
+  usually the interesting ones. Recording happens off the request path: the exchange goes to a
+  buffered queue that a batching writer drains, so the client never waits for the log of itself.
+- **The inspector** at `/projects/{slug}/log`, **live-tailing over SSE** — send a request and the
+  row appears without a refresh — with a detail view of any exchange, paging back through the
+  history, and a count of anything the queue had to drop, because a gap in a log that does not
+  admit to gaps is worse than no log.
+- **Credentials are redacted before they are stored.** `Authorization`, `Proxy-Authorization`,
+  `Cookie` and `Set-Cookie` reach the database as `Bearer [redacted]`, keeping the scheme and
+  dropping the secret. Bodies above 64 KiB are stored truncated and marked as truncated.
+- **Retention by partition.** `exchanges` is partitioned by month; a daily job creates the next
+  three months and detaches and drops anything older than the window, so expiry is a file unlink
+  rather than a `DELETE` over the busiest table in the schema.
 - Health probes, embedded and content-hashed static assets, structured JSON logs with a request
   id, graceful shutdown, migrations applied at startup.
 
@@ -64,9 +80,13 @@ the request log — is the next milestone.
   a cookie-authenticated mutating route from CSRF is the hole the guard exists to close; a bearer
   token is not a cookie and needs no exemption, so **M6 is what makes this route scriptable — at
   the same URL.**
-- No request log. Every mock request is a candidate `Exchange` and none is recorded. That is M4,
-  and it is the other half of why anyone reaches for a mock server: seeing exactly what a client
-  sent.
+- **The request log has no search and no filters.** It is a list newest-first with a detail view;
+  finding one request among a thousand means paging. Filtering by status, method or path is the
+  obvious next thing and is not built.
+- **The log is not exposed over the API**, so it can be read in a browser and not from a script.
+  It joins the rest of `/api/v1/` in M6.
+- **Requests to an unknown project slug are not recorded** — there is no project whose log they
+  would belong to. They are in the process log, not the inspector.
 - No API tokens and nothing else under `/api/v1/`. The schema exists in migration `00001`; the
   code does not.
 - No demo project — `/m/demo/…` is M5, and `demo` is a reserved slug held for it.
@@ -127,7 +147,7 @@ does **not** read `.env` — compose does, the Makefile does not.
 
 ## What you can do right now
 
-A complete pass through everything M0 to M3 deliver.
+A complete pass through everything M0 to M4 deliver.
 
 **In a browser** at <http://localhost:8080>:
 
@@ -162,7 +182,14 @@ A complete pass through everything M0 to M3 deliver.
 9. Delete the endpoint, the collection, or the project. The buttons are real forms that work
    without JavaScript, with `hx-confirm` layered on top by HTMX. Deleting a collection takes its
    documents and the endpoint serving it.
-10. Log out, log back in — with a differently-cased address, which works, because the email column
+10. **Request log**, from the button on the project page. Leave it open and `curl` the project in
+    another terminal: the row appears as the request lands, with no refresh — the page holds an
+    SSE connection to `/projects/{slug}/log/stream`. Click a row for the whole exchange: request
+    headers and body as they arrived, response headers and body as they left, status, duration
+    and remote address. Requests nothing matched are there too, marked as unmatched, which is
+    usually what you opened the log to find out. Bodies over 64 KiB are shown truncated and
+    labelled; `Authorization` and `Cookie` values were redacted before they were stored.
+11. Log out, log back in — with a differently-cased address, which works, because the email column
     is `citext`.
 
 The endpoint form shows the fields for the kind you chose and hides the other set. With JavaScript
@@ -284,6 +311,9 @@ logout form and the page's own form — so a scraper wants the right one.
 | `/projects/new`, `/projects/{slug}`, `/projects/{slug}/edit`, `/projects/{slug}/delete` | GET, POST | working, requires an account |
 | `/projects/{slug}/endpoints`, `/endpoints/new`, `/endpoints/{id}/edit`, `/endpoints/{id}`, `/endpoints/{id}/delete` | GET, POST | working, requires an account |
 | `/projects/{slug}/collections`, `/collections/new`, `/collections/{id}/edit`, `/collections/{id}`, `/collections/{id}/delete` | GET, POST | working, requires an account |
+| `/projects/{slug}/log` | GET | **working** — the request log, newest first, `?before=` to page back |
+| `/projects/{slug}/log/stream` | GET | **working** — the live tail, `text/event-stream`, `?after=` to resume |
+| `/projects/{slug}/log/{id}` | GET | **working** — one exchange in full |
 | `/healthz`, `/readyz` | GET | working, no session |
 | `/static/…` | GET | embedded assets, content-hashed, cached immutably |
 | `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF |
@@ -307,6 +337,9 @@ to start and reports every problem in one pass rather than one restart per mista
 | `RESTEST_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `RESTEST_LOG_FORMAT` | `json` | `json` for deployments, `text` for a readable terminal. |
 | `RESTEST_SHUTDOWN_TIMEOUT` | `15s` | How long a graceful shutdown waits for in-flight requests. |
+| `RESTEST_LOG_BODY_LIMIT` | `65536` | Bytes of each recorded body kept, 0–1048576. Above it the body is stored truncated and marked. |
+| `RESTEST_LOG_BUFFER` | `1000` | Exchanges that may wait to be written, 1–1000000. Beyond it they are dropped and counted, never queued in front of a response. |
+| `RESTEST_LOG_RETENTION_MONTHS` | `3` | Months of request log kept, counting the current one, 1–120. Expiry detaches and drops that month's partition. |
 
 `RESTEST_BASE_URL` does two jobs: it is what the UI shows as the root of every mock URL, and its
 **scheme decides whether cookies are marked `Secure`**. A browser never returns a `Secure` cookie
@@ -365,9 +398,21 @@ documents, the `jsonb` round trip for response headers, identifier allocation un
 concurrent creates, containment filtering against the GIN index, sorting and paging including a
 page past the end and twenty documents with an identical sort key, and reset. Several of them
 insert deliberately invalid rows *past* the Go validation to prove the database constraints and
-the Go rules agree in both directions. `TestTheM2Milestone` and `TestTheM3Milestone` walk each
-milestone end to end: define it in the form, `curl` it, and — for M3 — post, fetch, filter, delete
-and reset.
+the Go rules agree in both directions.
+
+The request log is tested at every level it has. The recorder's own tests make a write fail on
+demand and prove it batches, drops rather than blocks when the queue is full, counts drops
+separately from failed writes, warns about them, and flushes what is queued on shutdown. The
+middleware's tests prove that a body it recorded is still the body the handler reads, that a
+body of exactly the limit is not reported as truncated, that the UI's own traffic is not
+recorded, and that a delayed response still works through the capturing writer. The partition
+tests, against real Postgres, check that rows land in their month's partition, that uncovered
+months fall into the default, that retention drops what has expired and never the current month,
+and that maintenance is safe to run twice.
+
+`TestTheM2Milestone`, `TestTheM3Milestone` and `TestTheM4Milestone` walk each milestone end to
+end: define it in the form, `curl` it, and — for M3 — post, fetch, filter, delete and reset; for
+M4, open the SSE stream, send a request, and read the row off the wire.
 
 ## Repository layout
 
@@ -377,7 +422,8 @@ internal/
   config/             environment configuration, validated at startup
   logging/            slog handler construction
   database/           pgx pool, migration run
-  core/               domain logic: users, projects, endpoints, collections, documents
+  core/               domain logic: users, projects, endpoints, collections, documents,
+                      the exchange recorder and log partition maintenance
     queries/          hand-written SQL, input to sqlc
     dbgen/            sqlc output — generated, never edited
   mock/               inbound: the radix trie, the router, route expansion, suggestions
