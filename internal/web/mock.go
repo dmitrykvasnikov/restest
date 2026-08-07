@@ -63,6 +63,11 @@ func (s *Server) handleMock(w http.ResponseWriter, r *http.Request) {
 	// handler returns; with recording off the call does nothing.
 	noteExchange(r.Context(), result)
 
+	// The same decision, counted. It is what makes the match rate a number an
+	// operator can watch: an instance whose traffic is mostly no_route is one
+	// whose users are typing paths that do not exist.
+	s.metrics.ObserveMockOutcome(mockOutcomeLabel(result.Outcome))
+
 	switch result.Outcome {
 	case mock.Matched:
 		// A static endpoint writes what it was given; a collection route reads

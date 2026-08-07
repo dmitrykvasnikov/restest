@@ -385,6 +385,108 @@ applied.
 **The request log joined the API here**, read-only, closing the gap M4 left. An exchange is a
 record of what happened, and a record that can be edited is not one.
 
+### 8.2 What M7 decided — hardening
+
+M7 added nothing to the domain. Every decision here is about what the process will accept, what
+it tells a browser it may do with what it sends, and what an operator can see and recover.
+
+**Rate limits are in-process token buckets, keyed three ways.** Mock traffic is unauthenticated
+by design (§4), so the only things a request can be counted under are where it came from and
+what it was addressed to — both are limited, because the per-address limit never notices a
+project a whole CI fleet points at, and the per-project limit never notices one client abusing
+many projects. The management API is counted per credential, so one misbehaving job is refused
+without touching anybody else's token. The interface is not limited: it is behind a session,
+every mutating request costs a form submission, and a limit there is mostly a way to lock a
+person out of their own project while they are looking at it.
+
+In-process means per-instance, and two instances behind a load balancer therefore enforce each
+limit twice. That is the cost of not having a shared counter, and it is accepted for the reason
+§9.1 gives: Redis is the only thing that would fix it, there is no second instance yet, and a
+limiter that needs a network round trip to decide whether to serve a mock response costs more
+than the response. The rate is one setting per limit; the burst is derived from it — twice the
+rate, floor of twenty — because a burst below the rate refuses a client that is exactly at the
+limit and a burst far above it makes the limit meaningless for the short flood it exists to
+absorb, so the pair is not independent enough to be worth two knobs.
+
+**The limiter wraps the recorder rather than sitting inside it.** A refused request is not
+written to the project's request log. The alternative is tempting — the user would see their
+throttled requests in the inspector — but a limiter that still pays for a captured body, a queued
+exchange and a row sheds far less load than one that does not, and the whole purpose is to shed
+it. The refusal is not invisible: it is the 429 the client is holding, its body names the limit,
+and the count is a metric. The log stays a record of the traffic a project *served*.
+
+**A limiter's table is bounded by emptying, not by eviction.** Buckets untouched for a minute are
+swept; if the table is still at its ceiling when a new key arrives, it is emptied wholesale.
+Every bucket in it is a client currently being counted, so there is no unimportant one to evict,
+and maintaining an ordering on every request to save a walk that only happens when somebody is
+deliberately cycling keys is the wrong trade. Emptying costs a moment of leniency, which is the
+right way for a guard to fail: a refusal handed to the wrong client is worse than a request too
+many served to the right one. It is counted, so the ceiling being reached is visible.
+
+**`X-Forwarded-For` is read only from peers an operator named, and read right to left.** This is
+the question M0 deferred and it has one correct answer. A proxy *appends* the address it received
+the request from, so the rightmost entry is the only one written by something we chose to trust
+and everything to its left was written by whatever came before it. Walking right to left through
+the trusted hops and stopping at the first address that is not one of ours yields the nearest
+address nobody in the chain could have forged. The common wrong version — take the leftmost entry
+— hands the caller whatever address they wrote. With no trusted proxies configured the header is
+not read at all, because the safe default for an instance reached directly is the unsafe one for
+an instance behind a proxy, and guessing which this is would be worse than requiring the answer.
+
+**The interface gets a strict CSP; everything a project serves gets `sandbox`.** These are
+opposite policies from one origin, and both are necessary.
+
+The interface's policy is `default-src 'none'` and then only what is used, with no
+`'unsafe-inline'` anywhere. It is affordable because of a decision made in M1 and kept since: no
+template carries an inline script, an inline style or an `on…` attribute (§9.2, §9.3). Two things
+had to move for it. HTMX injects a `<style>` element for its indicator rules, which `style-src
+'self'` refuses — it is turned off through the `htmx-config` meta tag and the rules live in the
+stylesheet instead. HTMX also compiles `hx-vals="js:…"` with the `Function` constructor, which
+`script-src 'self'` refuses — nothing uses it, and saying so stops HTMX from trying. CodeMirror
+needed nothing: it writes `element.style.cssText`, which is CSSOM and not governed by `style-src`.
+
+The mock policy exists because **a project's response body is written by whoever owns the project
+and served from this origin**. Without a policy, a user could define an endpoint returning a page
+with a script in it, send the URL to somebody who has a session here, and have that script run
+with our origin's privileges — stored cross-site scripting, arriving through the front door as a
+feature. `Content-Security-Policy: sandbox` puts such a document in an opaque origin with scripts
+disabled, so it can read no cookie and make no same-origin request. It costs nothing for the
+traffic mocks are actually for, because CSP governs documents a browser renders and not a
+response a program fetched.
+
+**An endpoint cannot override the mock policy.** An endpoint carries a header map of its own —
+that is how somebody adds the CORS header their browser client needs — and those headers are
+applied inside the handler. So the security headers are written by a response-writer wrapper at
+`WriteHeader`, after the handler has had its turn, which is the one place a handler cannot get
+after. Otherwise one project could re-open the hole for every other user of the instance.
+`Cross-Origin-Resource-Policy` is deliberately *not* sent on mock traffic: a browser client
+fetching a mock from a page on another origin is exactly what this is for.
+
+**The body cap is applied once, above every handler.** A cap in each handler that reads a body is
+a cap the next handler forgets, and those are the ones where it would matter. The management API
+keeps a tighter one of its own, because a definition is a smaller thing than an upload.
+
+**Metrics label bounded sets only.** Nothing is labelled by project slug, path, client address or
+token: those are unbounded, and an unbounded label is how a metrics endpoint becomes the memory
+leak it was added to detect. The per-project view is the request log, which is stored, paginated
+and retained. The status code *is* a label, because the set is bounded by what this application
+sends and telling 404 from 429 is most of what the number is for. The four matcher outcomes are
+counted separately so that the match rate is computable from the scrape rather than approximated.
+
+The scrape is guarded by an optional token rather than a required one. On an instance behind a
+proxy that does not route `/metrics`, a token is one more secret to manage for no gain; on one
+published as it stands, the scrape names every project's traffic volume and this process's memory
+layout. Both deployments exist, so the setting exists — and it is never satisfied by a session,
+for the same reason the API's bearer path never falls back to one.
+
+**A backup is restored into a database that was dropped and recreated**, not restored over.
+`pg_restore --clean` leaves behind anything the dump does not mention — a table from a migration
+since rolled back, a partition from a month the backup predates — and a restore that leaves
+debris is one nobody can reason about. The application is stopped for it, because restoring
+underneath a running one would leave the in-memory route table answering for endpoints that no
+longer exist until its next refresh. A few seconds of downtime buys a restore that is one state
+followed by another rather than a blend of the two.
+
 ## 9. Stack
 
 | Layer | Choice | Note |
@@ -400,6 +502,8 @@ record of what happened, and a record that can be edited is not one.
 | Frontend | Go templates + HTMX + Alpine.js + Tailwind | §9.2 |
 | JSON editor | CodeMirror 5, vendored | §9.3 |
 | Logging | `log/slog`, JSON | |
+| Metrics | `prometheus/client_golang` | own registry, bounded labels — §8.2 |
+| Rate limiting | `golang.org/x/time/rate` | in-process token buckets, keyed — §8.2 |
 | Testing | stdlib `testing`, `httptest`, testcontainers-go | real Postgres in integration tests |
 | Deploy | multi-stage Docker → distroless, compose, Caddy for TLS | |
 
@@ -419,7 +523,9 @@ never needed, while SQLite → Postgres under load is real work.
 
 Redis is not in the stack. It becomes relevant only for rate limiting across multiple app
 instances in a public deployment; until then an in-process cache of endpoint definitions is
-enough.
+enough. **M7 shipped the in-process version**, as this said it would: token buckets in a map,
+per instance. The consequence is stated where it is felt — two instances enforce each limit twice
+(§8.2) — and the day there is a second instance is the day this paragraph is worth re-reading.
 
 ### 9.2 Why HTMX and not a SPA
 
@@ -497,6 +603,8 @@ restest/
       datasets/    # the built-in dataset seeds, embedded (§6.1)
       dbgen/       # sqlc output — generated, never edited
     mock/          # inbound: the matcher and route expansion
+    ratelimit/     # keyed token buckets, in-process (§8.2)
+    metrics/       # the Prometheus registry and collectors (§8.2)
     web/           # handlers, middleware
       templates/   # Go templates, embedded via go:embed
       static/      # generated CSS and vendored JS, embedded via go:embed
@@ -504,6 +612,7 @@ restest/
     runner/        # phase 2, outbound — depends only on core/
     integration/   # tests needing a real Postgres, behind a build tag
   migrations/      # goose migrations, embedded via go:embed
+  scripts/         # backup and restore, through pg_dump inside the container (§8.2)
   DESIGN.md
   task.md
 ```

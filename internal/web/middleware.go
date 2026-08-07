@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -115,6 +114,13 @@ func levelFor(r *http.Request, status int) slog.Level {
 	switch {
 	case status >= http.StatusInternalServerError:
 		return slog.LevelError
+	// A rate-limited request is the guard working, not a fault, and it arrives
+	// in exactly the volume the guard was added to absorb. A warning per
+	// refusal would turn a flood of requests into a flood of log lines, which
+	// is the second half of the same denial of service. The count is in
+	// restest_rate_limited_total, where a number belongs.
+	case status == http.StatusTooManyRequests:
+		return slog.LevelDebug
 	case status >= http.StatusBadRequest:
 		return slog.LevelWarn
 	case r.URL.Path == pathHealthz || r.URL.Path == pathReadyz:
@@ -124,16 +130,18 @@ func levelFor(r *http.Request, status int) slog.Level {
 	}
 }
 
-// remoteIP is the peer address of the connection. It is deliberately not
-// X-Forwarded-For: that header is only meaningful once we know which proxies
-// to trust, which is a hardening decision (M7), and until then believing it
-// would let any caller claim any address.
+// remoteIP is the address this request is attributed to: the peer's, unless it
+// arrived through a proxy an operator named in RESTEST_TRUSTED_PROXIES. The
+// walk happens once, above this, in withClientIP — see clientip.go for why the
+// header is not read by default.
+//
+// The fallback to the peer address is for the handler tests, which exercise
+// middleware below withClientIP without the whole chain above it.
 func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	if ip := ClientIP(r.Context()); ip != "" {
+		return ip
 	}
-	return host
+	return peerIP(r)
 }
 
 // recoverPanic turns a panicking handler into a 500 rather than a dropped

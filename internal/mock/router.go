@@ -98,9 +98,29 @@ func (r *Router) Refresh(ctx context.Context, every time.Duration) {
 
 // Lookup answers a request against the current table.
 func (r *Router) Lookup(slug, method, path string) Result {
-	r.mu.RLock()
-	table := r.table
-	r.mu.RUnlock()
+	return r.snapshot().Lookup(slug, method, path)
+}
 
-	return table.Lookup(slug, method, path)
+// HasProject reports whether the current table knows a project by this slug.
+func (r *Router) HasProject(slug string) bool {
+	return r.snapshot().HasProject(slug)
+}
+
+// Size reports how many projects and routes the current table holds. It is what
+// the gauges in internal/metrics read: a table that has quietly emptied itself
+// is the one failure of this component that answers every mock request wrongly
+// while looking perfectly healthy.
+func (r *Router) Size() (projects, routes int) {
+	table := r.snapshot()
+	return table.Projects(), table.Routes()
+}
+
+// snapshot takes the current table. The lock is held for a pointer read and
+// nothing more: the table it returns never changes once built, so a caller that
+// starts working against one finishes against it even if a rebuild lands
+// half-way.
+func (r *Router) snapshot() *Table {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.table
 }

@@ -26,6 +26,13 @@ func withCollection(t *testing.T, seed ...string) (*browser, *fakeDocuments) {
 
 func withCollectionEndpoint(t *testing.T, headers core.Headers, seed ...string) (*browser, *fakeDocuments) {
 	t.Helper()
+	return withCollectionOptions(t, headers, nil, seed...)
+}
+
+// withCollectionOptions is withCollectionEndpoint for a test that also needs to
+// adjust the server's options — the body cap, mostly.
+func withCollectionOptions(t *testing.T, headers core.Headers, tweak func(*Options), seed ...string) (*browser, *fakeDocuments) {
+	t.Helper()
 
 	project := core.MockProject{ID: uuid.New(), Slug: mockSlug}
 	collectionID := uuid.New()
@@ -52,7 +59,7 @@ func withCollectionEndpoint(t *testing.T, headers core.Headers, seed ...string) 
 		documents: docs,
 		mockData:  func(context.Context) (core.MockData, error) { return data, nil },
 	}
-	return newBrowser(t, store), docs
+	return newBrowserWith(t, store, tweak), docs
 }
 
 func mockPath(suffix string) string { return "/m/" + mockSlug + collectionRoot + suffix }
@@ -240,7 +247,7 @@ func TestWritesRefuseWhatIsNotAnObject(t *testing.T) {
 func TestOversizedBodyIsRefused(t *testing.T) {
 	b, _ := withCollection(t)
 
-	huge := `{"note":"` + strings.Repeat("x", maxMockRequestBody) + `"}`
+	huge := `{"note":"` + strings.Repeat("x", defaultMaxRequestBody) + `"}`
 	resp, body := b.do(http.MethodPost, mockPath(""), huge)
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413: %s", resp.StatusCode, body)

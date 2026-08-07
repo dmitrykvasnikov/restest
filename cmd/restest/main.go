@@ -17,26 +17,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/dmitrykvasnikov/restest/internal/config"
 	"github.com/dmitrykvasnikov/restest/internal/core"
 	"github.com/dmitrykvasnikov/restest/internal/database"
 	"github.com/dmitrykvasnikov/restest/internal/logging"
+	"github.com/dmitrykvasnikov/restest/internal/metrics"
 	"github.com/dmitrykvasnikov/restest/internal/mock"
 	"github.com/dmitrykvasnikov/restest/internal/web"
-)
-
-// Timeouts on the HTTP server itself, guarding against a client that opens a
-// connection and then dawdles. M7 revisits these.
-//
-// WriteTimeout stays where it is now that the log tail streams: that one
-// response lifts its own write deadline through http.ResponseController, which
-// is the same trick a delayed mock endpoint uses, and is better than weakening
-// the guard on every route to accommodate two.
-const (
-	readHeaderTimeout = 10 * time.Second
-	readTimeout       = 30 * time.Second
-	writeTimeout      = 30 * time.Second
-	idleTimeout       = 120 * time.Second
 )
 
 // logMaintenanceInterval is how often partitions are created and expired ones
@@ -137,6 +126,14 @@ func run(ctx context.Context) error {
 		}
 	}
 
+	// Instrumentation. Built before the server, because the server's options
+	// carry it, and left nil when metrics are off — which is what makes
+	// /metrics unregistered rather than registered and empty.
+	var instruments *metrics.Metrics
+	if cfg.MetricsEnabled {
+		instruments = metrics.New(revision())
+	}
+
 	app, err := web.New(web.Options{
 		Logger:             logger,
 		Store:              store,
@@ -147,18 +144,41 @@ func run(ctx context.Context) error {
 		LogBodyLimit:       cfg.LogBodyLimit,
 		LogRetentionMonths: cfg.LogRetentionMonths,
 		DemoEnabled:        cfg.DemoEnabled,
+
+		Metrics:      metricsOption(instruments),
+		MetricsToken: cfg.MetricsToken,
+
+		RateLimitIP:      cfg.RateLimitIP,
+		RateLimitProject: cfg.RateLimitProject,
+		RateLimitAPI:     cfg.RateLimitAPI,
+		TrustedProxies:   cfg.TrustedProxies,
+		MaxRequestBody:   cfg.MaxRequestBody,
 	})
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	// The gauges over state this file can reach and internal/metrics cannot:
+	// the recorder's queue, the route table, and the limiters' own tables. They
+	// are read at scrape time, so nothing here has to be pushed or kept fresh.
+	publishGauges(instruments, recorder, matcher, app)
+
+	// Expired buckets are swept off the limiters' tables for as long as the
+	// process runs. Without this they stay bounded — by the cap, which empties
+	// the table wholesale — but a sweep is the cheaper of the two mechanisms
+	// and the one that should normally be doing the work.
+	for _, limiter := range app.Limiters() {
+		go limiter.Run(ctx)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           app.Handler(),
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
 
@@ -207,6 +227,66 @@ func run(ctx context.Context) error {
 
 	logger.Info("stopped")
 	return nil
+}
+
+// metricsOption turns a possibly-nil *metrics.Metrics into the interface
+// web.Options wants.
+//
+// The dance is the well-known typed-nil trap: assigning a nil *metrics.Metrics
+// straight into an interface field produces an interface that is not nil, and
+// web.New's "was I given instrumentation?" check would then answer yes and
+// register /metrics against a registry that does not exist.
+func metricsOption(m *metrics.Metrics) web.Metrics {
+	if m == nil {
+		return nil
+	}
+	return m
+}
+
+// publishGauges registers the metrics whose values live in other components.
+//
+// They are gauge and counter functions rather than numbers pushed from those
+// components, so that nothing in core, mock or web has to know that Prometheus
+// exists — and so that a scrape reports the state at the moment it was taken
+// rather than the last time somebody remembered to update it.
+func publishGauges(m *metrics.Metrics, recorder *core.Recorder, matcher *mock.Router, app *web.Server) {
+	if m == nil {
+		return
+	}
+
+	m.Gauge("restest_exchange_queue_depth",
+		"Exchanges waiting to be written to the request log.", nil,
+		func() float64 { return float64(recorder.Queued()) })
+	m.Gauge("restest_exchange_queue_capacity",
+		"How many exchanges the request log buffer holds before it drops.", nil,
+		func() float64 { return float64(recorder.Capacity()) })
+	m.Counter("restest_exchanges_dropped_total",
+		"Exchanges lost to a full buffer or a failed write since this process started.", nil,
+		func() float64 { return float64(recorder.Dropped()) })
+
+	m.Gauge("restest_route_table_projects",
+		"Projects in the mock route table.", nil,
+		func() float64 {
+			projects, _ := matcher.Size()
+			return float64(projects)
+		})
+	m.Gauge("restest_route_table_routes",
+		"Routes in the mock route table, counting the six a collection expands into.", nil,
+		func() float64 {
+			_, routes := matcher.Size()
+			return float64(routes)
+		})
+
+	for scope, limiter := range app.Limiters() {
+		m.Gauge("restest_rate_limiter_keys",
+			"Buckets a rate limiter is currently holding.",
+			prometheus.Labels{"scope": scope},
+			func() float64 { return float64(limiter.Len()) })
+		m.Counter("restest_rate_limiter_cleared_total",
+			"Times a rate limiter's table was emptied for reaching its key ceiling.",
+			prometheus.Labels{"scope": scope},
+			func() float64 { return float64(limiter.Cleared()) })
+	}
 }
 
 // stampedRevision is set at link time by the container build, which has no

@@ -58,6 +58,27 @@ services:
       # instance that should serve nothing to visitors without an account.
       RESTEST_DEMO_ENABLED: ${RESTEST_DEMO_ENABLED:-true}
       RESTEST_DEMO_RESET_INTERVAL: ${RESTEST_DEMO_RESET_INTERVAL:-1h}
+      # Rate limits, in requests per second per key; zero turns one off.
+      RESTEST_RATE_LIMIT_IP: ${RESTEST_RATE_LIMIT_IP:-50}
+      RESTEST_RATE_LIMIT_PROJECT: ${RESTEST_RATE_LIMIT_PROJECT:-200}
+      RESTEST_RATE_LIMIT_API: ${RESTEST_RATE_LIMIT_API:-20}
+      # Whose X-Forwarded-For to believe. Empty by default, which means the
+      # header is never read: an instance published straight from compose is
+      # reached directly, and a proxy in front of one is something the operator
+      # knows about and names here.
+      RESTEST_TRUSTED_PROXIES: ${RESTEST_TRUSTED_PROXIES:-}
+      # Caps on one request, and the server's own timeouts.
+      RESTEST_MAX_REQUEST_BODY: ${RESTEST_MAX_REQUEST_BODY:-1048576}
+      RESTEST_MAX_HEADER_BYTES: ${RESTEST_MAX_HEADER_BYTES:-65536}
+      RESTEST_READ_HEADER_TIMEOUT: ${RESTEST_READ_HEADER_TIMEOUT:-10s}
+      RESTEST_READ_TIMEOUT: ${RESTEST_READ_TIMEOUT:-30s}
+      RESTEST_WRITE_TIMEOUT: ${RESTEST_WRITE_TIMEOUT:-30s}
+      RESTEST_IDLE_TIMEOUT: ${RESTEST_IDLE_TIMEOUT:-120s}
+      # The Prometheus exposition. The port is published on loopback by
+      # default, so /metrics is not reachable from the network unless
+      # RESTEST_BIND says otherwise — at which point set a token.
+      RESTEST_METRICS_ENABLED: ${RESTEST_METRICS_ENABLED:-true}
+      RESTEST_METRICS_TOKEN: ${RESTEST_METRICS_TOKEN:-}
     ports:
       # Loopback by default: until M1 there is no authentication at all, and
       # even after it there is no reason to put a development instance on the

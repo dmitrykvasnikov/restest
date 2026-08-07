@@ -34,6 +34,13 @@ type mockEndpoint struct {
 // use — which is itself part of what is being checked.
 func withMocks(t *testing.T, endpoints ...mockEndpoint) *browser {
 	t.Helper()
+	return withMockOptions(t, nil, endpoints...)
+}
+
+// withMockOptions is withMocks for a test that also needs to adjust the
+// server's options — the rate limits, mostly.
+func withMockOptions(t *testing.T, tweak func(*Options), endpoints ...mockEndpoint) *browser {
+	t.Helper()
 
 	project := core.MockProject{ID: uuid.New(), Slug: mockSlug}
 	data := core.MockData{Projects: []core.MockProject{project}}
@@ -59,7 +66,7 @@ func withMocks(t *testing.T, endpoints ...mockEndpoint) *browser {
 	store := stubStore{
 		mockData: func(context.Context) (core.MockData, error) { return data, nil },
 	}
-	return newBrowser(t, store)
+	return newBrowserWith(t, store, tweak)
 }
 
 // do sends a bare request, without the CSRF token or the same-origin headers a

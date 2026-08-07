@@ -18,14 +18,6 @@ import (
 	"github.com/dmitrykvasnikov/restest/internal/mock"
 )
 
-// maxMockRequestBody caps what a mock write will read.
-//
-// Without it, one request could ask the process to hold as much memory as the
-// client cares to send, and a mock server is by design something people point
-// half-finished clients at. The cap matches the one on a stored response body,
-// so the two directions agree about how big a document may be.
-const maxMockRequestBody = 1 << 20 // 1 MiB
-
 // headerTotalCount reports how many documents the filters matched, as opposed
 // to how many are in the page being returned. A client paging through has no
 // other way to know when to stop.
@@ -152,9 +144,13 @@ func (s *Server) deleteDocument(w http.ResponseWriter, r *http.Request, route mo
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// readMockBody reads and caps a write request's body.
+// readMockBody reads a write request's body.
+//
+// The cap is applied above, once, by withBodyLimit — so this reads to the end
+// of a body that has already been bounded, and reports the refusal in the mock
+// server's own error shape when the cap was the reason the read stopped.
 func (s *Server) readMockBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxMockRequestBody))
+	body, err := io.ReadAll(r.Body)
 	if err == nil {
 		return body, true
 	}
@@ -162,7 +158,7 @@ func (s *Server) readMockBody(w http.ResponseWriter, r *http.Request) ([]byte, b
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		s.writeMockError(w, r, http.StatusRequestEntityTooLarge,
-			"the request body is larger than the %d byte limit", maxMockRequestBody)
+			"the request body is larger than the %d byte limit", tooLarge.Limit)
 		return nil, false
 	}
 	// A body that stopped arriving. There is no response worth composing for a

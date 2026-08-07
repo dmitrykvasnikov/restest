@@ -7,3 +7,7 @@
 # Go test and coverage artefacts.
 *.out
 *.test
+
+# Database dumps taken by scripts/backup.sh. A backup holds every account's
+# data and belongs wherever backups are kept, not in the repository.
+/backups/

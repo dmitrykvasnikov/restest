@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -62,6 +63,50 @@ type Config struct {
 	// DemoResetInterval is how often the demo project is restored to its seeds,
 	// so that one visitor's writes cannot spoil it for the next.
 	DemoResetInterval time.Duration
+
+	// ReadHeaderTimeout bounds how long a client may take to send its request
+	// line and headers. It is the guard against a connection opened and then
+	// left to dawdle, which costs the server a goroutine and the client nothing.
+	ReadHeaderTimeout time.Duration
+	// ReadTimeout bounds the whole request, headers and body together.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds the response. An endpoint configured with a delay
+	// lifts it for its own response through http.ResponseController, which is
+	// better than weakening the guard on every route to accommodate a few.
+	WriteTimeout time.Duration
+	// IdleTimeout bounds how long a kept-alive connection may sit between
+	// requests.
+	IdleTimeout time.Duration
+	// MaxHeaderBytes caps the request line and headers.
+	MaxHeaderBytes int
+	// MaxRequestBody caps every request body, applied before any handler reads
+	// one. A mock server is by design something people point half-finished
+	// clients at, and without a cap one request can ask this process to hold as
+	// much memory as the client cares to send.
+	MaxRequestBody int
+
+	// RateLimitIP is how many mock requests per second one client address may
+	// make, across every project. Zero turns the limit off.
+	RateLimitIP int
+	// RateLimitProject is how many mock requests per second one project may
+	// serve, across every client. Zero turns the limit off.
+	RateLimitProject int
+	// RateLimitAPI is how many management API requests per second one
+	// credential may make. Zero turns the limit off.
+	RateLimitAPI int
+	// TrustedProxies are the peers whose X-Forwarded-For header is believed.
+	// Empty — the default — means the header is never believed and the client
+	// address is always the peer's, which is the only safe answer for an
+	// instance reached directly.
+	TrustedProxies []netip.Prefix
+
+	// MetricsEnabled serves the Prometheus exposition at /metrics.
+	MetricsEnabled bool
+	// MetricsToken, when set, is the bearer token /metrics requires. Empty
+	// leaves the endpoint open to anyone who can reach it, which is right
+	// behind a proxy that does not route it and wrong on an instance published
+	// as it stands.
+	MetricsToken string
 }
 
 // Bounds on the demo reset interval. The floor is not about correctness — a
@@ -107,6 +152,30 @@ func Load(lookup LookupFunc) (Config, error) {
 		DemoEnabled: l.boolean("DEMO_ENABLED", true),
 		DemoResetInterval: l.durationRange("DEMO_RESET_INTERVAL", time.Hour,
 			minDemoResetInterval, maxDemoResetInterval),
+
+		// Server timeouts. The defaults are generous enough that no honest
+		// client meets them and short enough that a connection nobody is using
+		// is reclaimed. They are settings rather than constants because the one
+		// deployment that legitimately needs a longer read is the one nobody
+		// anticipated.
+		ReadHeaderTimeout: l.durationRange("READ_HEADER_TIMEOUT", 10*time.Second, time.Second, time.Hour),
+		ReadTimeout:       l.durationRange("READ_TIMEOUT", 30*time.Second, time.Second, time.Hour),
+		WriteTimeout:      l.durationRange("WRITE_TIMEOUT", 30*time.Second, time.Second, time.Hour),
+		IdleTimeout:       l.durationRange("IDLE_TIMEOUT", 120*time.Second, time.Second, time.Hour),
+		MaxHeaderBytes:    l.intVal("MAX_HEADER_BYTES", 64*1024, 4*1024, 1024*1024),
+		MaxRequestBody:    l.intVal("MAX_REQUEST_BODY", 1024*1024, 4*1024, 64*1024*1024),
+
+		// Rate limits, in requests per second per key. The defaults are set
+		// where a test suite hammering a mock never notices them and a runaway
+		// loop does: a client sending fifty mock requests a second is already
+		// far past what a CI job needs from a fixture server.
+		RateLimitIP:      l.intVal("RATE_LIMIT_IP", 50, 0, 1_000_000),
+		RateLimitProject: l.intVal("RATE_LIMIT_PROJECT", 200, 0, 1_000_000),
+		RateLimitAPI:     l.intVal("RATE_LIMIT_API", 20, 0, 1_000_000),
+		TrustedProxies:   l.prefixes("TRUSTED_PROXIES"),
+
+		MetricsEnabled: l.boolean("METRICS_ENABLED", true),
+		MetricsToken:   l.str("METRICS_TOKEN", ""),
 	}
 	if err := l.err(); err != nil {
 		return Config{}, err
@@ -154,7 +223,36 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("log_retention_months", c.LogRetentionMonths),
 		slog.Bool("demo_enabled", c.DemoEnabled),
 		slog.Duration("demo_reset_interval", c.DemoResetInterval),
+		slog.Duration("read_header_timeout", c.ReadHeaderTimeout),
+		slog.Duration("read_timeout", c.ReadTimeout),
+		slog.Duration("write_timeout", c.WriteTimeout),
+		slog.Duration("idle_timeout", c.IdleTimeout),
+		slog.Int("max_header_bytes", c.MaxHeaderBytes),
+		slog.Int("max_request_body", c.MaxRequestBody),
+		slog.Int("rate_limit_ip", c.RateLimitIP),
+		slog.Int("rate_limit_project", c.RateLimitProject),
+		slog.Int("rate_limit_api", c.RateLimitAPI),
+		slog.String("trusted_proxies", c.TrustedProxiesString()),
+		slog.Bool("metrics_enabled", c.MetricsEnabled),
+		// Whether the endpoint is guarded, never by what. A token in the
+		// startup log is a token in the log aggregator.
+		slog.Bool("metrics_token_set", c.MetricsToken != ""),
 	)
+}
+
+// TrustedProxiesString renders the trusted list for the startup log, where
+// "none" is a more readable answer than an empty bracket pair — and is the
+// answer an operator debugging a wrong client address most needs to see.
+func (c Config) TrustedProxiesString() string {
+	if len(c.TrustedProxies) == 0 {
+		return "none"
+	}
+
+	parts := make([]string, len(c.TrustedProxies))
+	for i, p := range c.TrustedProxies {
+		parts[i] = p.String()
+	}
+	return strings.Join(parts, ",")
 }
 
 // loader reads individual variables, accumulating problems instead of failing
@@ -283,6 +381,42 @@ func (l *loader) httpURL(key, def string) string {
 		return def
 	}
 	return strings.TrimRight(u.String(), "/")
+}
+
+// prefixes reads a comma-separated list of IP addresses and CIDR blocks — the
+// peers whose X-Forwarded-For header is worth believing.
+//
+// A bare address is accepted as well as a block, because "the one proxy in
+// front of this instance" is the common case and writing /32 after it is a
+// detail to get wrong rather than a decision to make. Unset means an empty
+// list, which means the header is never believed.
+func (l *loader) prefixes(key string) []netip.Prefix {
+	v, ok := l.raw(key)
+	if !ok {
+		return nil
+	}
+
+	var out []netip.Prefix
+	for _, field := range strings.Split(v, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+
+		if prefix, err := netip.ParsePrefix(field); err == nil {
+			// Masked, so that 10.0.0.7/8 means the block the author meant
+			// rather than a prefix netip.Prefix.Contains would refuse to match.
+			out = append(out, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(field)
+		if err != nil {
+			l.fail(key, "%q is not an IP address or CIDR block such as 10.0.0.0/8", field)
+			continue
+		}
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out
 }
 
 func (l *loader) oneOf(key, def string, allowed ...string) string {
