@@ -51,6 +51,16 @@ func bearerToken(r *http.Request) (string, bool) {
 func (s *Server) requireAPIUser(h userHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented, isBearer := bearerToken(r)
+
+		// The rate limit is applied here, and here rather than anywhere else
+		// for two reasons. It is before AuthenticateAPIToken, so a flood of
+		// wrong tokens is refused without a database round trip each; and every
+		// /api/v1/ route goes through this function, so a route added later is
+		// limited by construction rather than by remembering to wrap it.
+		if !s.allowAPI(w, r, presented, isBearer) {
+			return
+		}
+
 		if !isBearer {
 			user, ok := userFrom(r.Context())
 			if !ok {

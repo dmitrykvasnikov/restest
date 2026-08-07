@@ -151,3 +151,18 @@ down: ## Stop the stack, keeping the data volume
 .PHONY: logs
 logs: ## Follow the application log
 	docker compose logs -f app
+
+# --- backup -------------------------------------------------------------------
+#
+# pg_dump and pg_restore run inside the database container, so the host needs
+# nothing but Docker. See scripts/ for what each one does and the README for the
+# procedure, including the drill that proves a backup is restorable.
+
+.PHONY: backup
+backup: ## Dump the database into backups/
+	@scripts/backup.sh
+
+.PHONY: restore
+restore: ## Restore the database: make restore FILE=backups/restest-….dump
+	@test -n "$(FILE)" || { echo "usage: make restore FILE=backups/restest-….dump"; exit 1; }
+	@scripts/restore.sh $(FILE)

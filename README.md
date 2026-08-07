@@ -13,20 +13,27 @@ Single Go binary, PostgreSQL, server-rendered HTML. No npm in the toolchain, no 
 
 ## Project status
 
-**Milestones M0 through M6 are done.** The mock server works, it holds state, and it writes down
-what passed through it: define an endpoint or a collection in the web interface and it answers
-`curl` immediately, with no restart and no deploy. `POST` a record and the next `GET` returns it.
-Every mock request lands in a per-project log that tails live in the browser, so what a client
-actually sent is visible as it arrives. **And none of it needs the browser**: an API token
-reaches the whole of `/api/v1/`, so a CI job can create a project, define its endpoints, read the
-log and reset state between runs. There is also something to try before any of that: a shared
-demo project at `/m/demo/…` answers with no account at all.
+**Milestones M0 through M7 are done — the MVP is complete.** The mock server works, it holds
+state, and it writes down what passed through it: define an endpoint or a collection in the web
+interface and it answers `curl` immediately, with no restart and no deploy. `POST` a record and
+the next `GET` returns it. Every mock request lands in a per-project log that tails live in the
+browser, so what a client actually sent is visible as it arrives. **And none of it needs the
+browser**: an API token reaches the whole of `/api/v1/`, so a CI job can create a project, define
+its endpoints, read the log and reset state between runs. There is also something to try before
+any of that: a shared demo project at `/m/demo/…` answers with no account at all.
+
+M7 made it something you can leave running: rate limits on the traffic that is unauthenticated by
+design, caps and timeouts on what one request may cost, a strict Content-Security-Policy on the
+interface and a sandbox on everything a project serves, Prometheus metrics at `/metrics`, and a
+backup and restore procedure that has been used to restore.
 
 ```sh
 curl localhost:8080/m/demo/users        # eight users, no account, no token
 
 # and with a token, the same mocks are configurable from a script
 curl -H "Authorization: Bearer $RESTEST_TOKEN" localhost:8080/api/v1/
+
+curl localhost:8080/metrics             # request rate, match rate, latency, queue depth
 ```
 
 | Milestone | Subject | Status |
@@ -38,7 +45,7 @@ curl -H "Authorization: Bearer $RESTEST_TOKEN" localhost:8080/api/v1/
 | M4 | Request log and inspector: recording, live tail over SSE, retention | **done** |
 | M5 | Public datasets and the demo project at `/m/demo/…` | **done** |
 | M6 | API tokens and the management API at `/api/v1/` | **done** |
-| M7 | Hardening: rate limits, CSP, metrics, backups | next |
+| M7 | Hardening: rate limits, body caps, CSP, metrics, backup and restore | **done** |
 
 `PLAN.md` holds the full milestone list and each one's "done when" condition.
 
@@ -102,6 +109,35 @@ curl -H "Authorization: Bearer $RESTEST_TOKEN" localhost:8080/api/v1/
 - **A request that presents a token is authenticated by that token alone**, never falling back
   to the session — which is what makes those requests safe to exempt from CSRF while the cookie
   stays guarded.
+- **Rate limits.** Mock traffic is counted per client address and per project, and the management
+  API per credential — the token, or the account behind the session. A refusal is a 429 with
+  `Retry-After` and a body naming the limit it hit, in the same JSON shape as every other mock
+  error. Each limit is a setting and zero turns it off. The interface itself is not limited.
+- **Caps and timeouts.** Every request body is capped before any handler reads one, headers are
+  capped, and the server has read, write and idle timeouts — all settings. A delayed endpoint
+  still works: it lifts its own write deadline rather than the guard being relaxed for everybody.
+- **A strict Content-Security-Policy** on every page: `default-src 'none'`, scripts and styles
+  from this origin only, no `unsafe-inline` anywhere. That is affordable because no template
+  carries an inline script, an inline style or an `on…` attribute — verified in a real browser
+  against the CodeMirror editor and the live log tail, with zero violations.
+- **Everything a project serves is sandboxed.** A mock response carries
+  `Content-Security-Policy: sandbox`, so an endpoint returning a page with a script in it renders
+  in an opaque origin with scripts disabled — it cannot read the session cookie or make a
+  same-origin request. An endpoint cannot override this with response headers of its own; the
+  header is written after the handler has had its turn. Browser clients fetching mocks
+  cross-origin are unaffected, because the header that would refuse them is deliberately absent.
+- **Who a request is from.** `X-Forwarded-For` is read only from peers named in
+  `RESTEST_TRUSTED_PROXIES`, and then right to left, stopping at the first address no trusted hop
+  wrote. With nothing named — the default — the header is ignored entirely, because believing it
+  otherwise lets any caller claim any address.
+- **Prometheus metrics at `/metrics`**: request rate and latency by surface, the matcher's four
+  outcomes so the match rate is computable, rate-limit refusals, the exchange queue's depth and
+  capacity, the size of the route table, and the Go and process collectors. Labels are bounded
+  sets on purpose — nothing is labelled by project, path or address. Optionally behind a bearer
+  token of its own.
+- **Backup and restore.** `make backup` dumps through `pg_dump` inside the database container;
+  `make restore FILE=…` stops the application, recreates the database, restores and waits for
+  `/readyz`. Both need nothing on the host but Docker.
 - Health probes, embedded and content-hashed static assets, structured JSON logs with a request
   id, graceful shutdown, migrations applied at startup.
 
@@ -125,24 +161,44 @@ curl -H "Authorization: Bearer $RESTEST_TOKEN" localhost:8080/api/v1/
   in and open it.
 - **No state isolation.** Collections hold one set of documents per project, so two parallel CI
   runs against one project interfere. `DESIGN.md` §12.1 has the additive path.
-- **No rate limiting anywhere**, on mock traffic or on `/api/v1/`, so a token that leaks is
-  bounded by nothing but the database. That is M7's, along with the rest of the hardening.
-- No password reset, no account deletion in the UI, no CSP, and no CORS headers by default —
-  though an endpoint can set its own response headers, including
-  `Access-Control-Allow-Origin`, and they apply to collection responses too. Reset needs a mail
-  decision; the rest is M7.
+- **The rate limits are per process.** They are in-memory token buckets, so two instances behind
+  a load balancer enforce each limit twice — once each — and a caller spread across both gets
+  twice the rate. A shared counter means Redis, which this project does not have and does not
+  want until there is a second instance to share with (`DESIGN.md` §9.1).
+- **Rate-limited requests are not in the inspector.** The limiter wraps the recorder rather than
+  sitting inside it, so a refused request costs neither a captured body nor a row. The refusal is
+  the 429 the client is holding, and the count is in `restest_rate_limited_total`.
+- **No CORS headers by default** — though an endpoint can set its own response headers, including
+  `Access-Control-Allow-Origin`, and they apply to collection responses too.
+- No password reset and no account deletion in the UI. Reset needs a decision about mail that has
+  not been made.
 
 ---
 
 ## Requirements
 
-- **Docker** with Compose — enough on its own for the quick start.
-- **Go 1.26** if you want to run the server on the host, run the tests, or work on the code.
+**To run it, all you need is Docker.**
+
+| Tool | Needed for | Notes |
+|---|---|---|
+| **Docker** with the Compose plugin | Running it, and `make backup` / `make restore` | `docker compose version` should print something. Everything else runs inside the containers, including `pg_dump` and `pg_restore` — there is no need for a Postgres client on the host. |
+| **`make`** | The commands below | Everything a target does is one or two commands; `make help` lists them, and you can run them by hand if you would rather not install `make`. |
+| **`bash` and `curl`** | `scripts/backup.sh`, `scripts/restore.sh`, and the examples in this file | Both are present on any Linux or macOS system as it ships. |
+| **Go 1.26** | Running the server on the host, running the tests, or working on the code | Not needed to run the stack. |
 
 Nothing else needs installing. `goose`, `sqlc` and `golangci-lint` are pinned in the `Makefile`
 and fetched by `go run` when a target needs them; Tailwind is a single downloaded binary and its
-output stylesheet is committed, and CodeMirror is vendored as plain script files, so `go build`
-needs neither Node nor the network.
+output stylesheet is committed; CodeMirror and HTMX are vendored as plain script files. So
+**`go build` needs neither Node nor the network**, and **there is no npm in the toolchain** —
+that is a constraint this project keeps rather than a fact about it today (`DESIGN.md` §9.2).
+
+Optional, and only if you want them:
+
+- **A Prometheus server**, to scrape `/metrics`. The endpoint works without one; `curl` reads it
+  perfectly well.
+- **A reverse proxy** such as Caddy or nginx, for TLS on a public instance. See
+  [Running it behind a proxy](#running-it-behind-a-proxy), which has the two settings that
+  matter.
 
 ## Quick start
 
@@ -393,6 +449,23 @@ curl -i localhost:8080/readyz    # 200, or 503 {"status":"unavailable","detail":
 `/healthz` deliberately touches nothing else: a liveness probe that fails when the database is
 down would have an orchestrator restart a perfectly healthy process.
 
+**And what the instance itself is doing**, which needs no session either:
+
+```sh
+curl -s localhost:8080/metrics | grep restest_mock_requests_total
+# restest_mock_requests_total{outcome="matched"} 41
+# restest_mock_requests_total{outcome="no_route"} 3
+
+# a burst past the per-address limit, to see the guard answer
+seq 1 200 | xargs -P 30 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
+  localhost:8080/m/demo/users | sort | uniq -c
+#     122 200
+#      78 429
+```
+
+[Operating it](#operating-it) has the rest: what each limit is, how to back the database up and
+restore it, and the two settings a proxied instance must change.
+
 Scripting the forms with curl needs care: `nosurf` requires `Origin`, `Referer` **or**
 `Sec-Fetch-Site` on every unsafe request, plus the CSRF token from the form. Browsers send those
 headers; a script has to be told to. Note also that a logged-in page carries two CSRF fields — the
@@ -415,6 +488,7 @@ logout form and the page's own form — so a scraper wants the right one.
 | `/tokens` | GET, POST | **working** — API tokens; the plaintext is shown once, on the page that created it |
 | `/tokens/{id}/delete` | POST | **working** — revoke, effective on the next request |
 | `/healthz`, `/readyz` | GET | working, no session |
+| `/metrics` | GET | **working** — Prometheus exposition; 404 when `RESTEST_METRICS_ENABLED=false`, behind `RESTEST_METRICS_TOKEN` when one is set |
 | `/static/…` | GET | embedded assets, content-hashed, cached immutably |
 | `/m/{slug}/…` | any | **working** — mock traffic, no session, no CSRF, no token |
 | `/m/demo/…` | any | **working** — the shared demo project, the same handler as any other slug |
@@ -443,6 +517,139 @@ should not be handed a page of HTML.
 Anything unmatched renders the application's own 404 page, and a path that exists under a
 different verb returns 405 with an `Allow` header rather than a misleading 404.
 
+---
+
+## Operating it
+
+Everything in this section is on by default with settings that no honest client meets. It is here
+because the defaults are decisions, and an operator should be able to see what they are.
+
+### Rate limits
+
+Three limits, each in requests per second per key, each turned off by setting it to zero:
+
+| Setting | Default | Counted per | Why |
+|---|---|---|---|
+| `RESTEST_RATE_LIMIT_IP` | `50` | client address, across every project | One runaway loop should not be able to use the whole instance. |
+| `RESTEST_RATE_LIMIT_PROJECT` | `200` | project, across every client | A project a whole CI fleet points at is one the per-address limit would never notice. |
+| `RESTEST_RATE_LIMIT_API` | `20` | credential — the token, or the account behind the session | The credentialed surface. A script with a mistake in it can otherwise create projects until the disk fills. |
+
+The bucket depth is twice the rate, with a floor of 20, so a client that has been idle for a
+second can spend two seconds' worth at once. The interface is deliberately not limited: it is
+behind a session, and a limit there is mostly a way to lock somebody out of their own project
+while they are looking at it.
+
+A refusal looks like this, and says which limit it hit:
+
+```sh
+$ curl -i localhost:8080/m/demo/users
+HTTP/1.1 429 Too Many Requests
+Retry-After: 1
+Content-Type: application/json; charset=utf-8
+
+{"error":"too many requests from this address; this instance serves 50 mock requests a second per client","project":"demo","method":"GET","path":"/users"}
+```
+
+Refusals are counted in `restest_rate_limited_total{scope=…}`. They are **not** in the project's
+request log: the limiter wraps the recorder rather than sitting inside it, so shedding load
+actually sheds it.
+
+### Running it behind a proxy
+
+Two settings matter, and both are wrong by default for a proxied instance — deliberately, because
+the safe default for one reached directly is the unsafe one for one behind a proxy, and guessing
+would be worse than asking.
+
+```sh
+RESTEST_BASE_URL=https://restest.example.com   # the address users actually type
+RESTEST_TRUSTED_PROXIES=172.18.0.0/16          # the proxy, as this process sees it
+```
+
+`RESTEST_BASE_URL` decides whether cookies are marked `Secure`. A browser never returns a
+`Secure` cookie over plain HTTP, so an instance behind TLS that leaves this at its default will
+find that **nobody can log in**.
+
+`RESTEST_TRUSTED_PROXIES` is a comma-separated list of addresses and CIDR blocks. Only requests
+arriving from one of them have their `X-Forwarded-For` read, and it is read right to left,
+stopping at the first address no trusted hop wrote — which is the only entry a caller could not
+have forged. With the list empty, the header is ignored and every request is attributed to the
+address it arrived from. Leave it empty and a proxied instance will count the whole internet as
+one client for the rate limit, and record the proxy's address for every request in every log.
+
+The value is what *this process* sees as the peer, which behind compose is the proxy's address on
+the Docker network rather than its public one. `docker compose logs app` shows it in the
+`remote_ip` field of any request that arrived through the proxy.
+
+### Metrics
+
+`GET /metrics` serves the Prometheus text exposition. `RESTEST_METRICS_ENABLED=false` unregisters
+it, and the path then answers 404.
+
+| Metric | Type | What it answers |
+|---|---|---|
+| `restest_http_requests_total{surface,method,status}` | counter | Request rate, by `mock` / `app` / `api` / `ops` |
+| `restest_http_request_duration_seconds{surface}` | histogram | Latency, and the count for a rate |
+| `restest_mock_requests_total{outcome}` | counter | The match rate: `matched` over the sum of all four outcomes |
+| `restest_rate_limited_total{scope}` | counter | Refusals, by which limit refused them |
+| `restest_exchange_queue_depth` / `_capacity` | gauge | Whether the request log is keeping up |
+| `restest_exchanges_dropped_total` | counter | Whether it already failed to |
+| `restest_route_table_projects` / `_routes` | gauge | A route table that has quietly emptied itself |
+| `restest_rate_limiter_keys{scope}` / `_cleared_total` | gauge, counter | How many clients are being counted, and whether the table ever hit its ceiling |
+| `restest_build_info{revision}` | gauge | Which build this is |
+| `go_*`, `process_*` | — | Heap, goroutines, file descriptors |
+
+A useful pair to start from:
+
+```promql
+rate(restest_mock_requests_total{outcome="matched"}[5m])
+  / rate(restest_mock_requests_total[5m])                    # match rate
+histogram_quantile(0.99,
+  rate(restest_http_request_duration_seconds_bucket{surface="mock"}[5m]))
+```
+
+**The scrape is not public information**: it names every project's traffic volume and this
+process's memory layout. Compose publishes the port on `127.0.0.1` only, so by default nothing on
+the network can reach it. On an instance that is published as it stands, either stop the proxy
+routing `/metrics` or set `RESTEST_METRICS_TOKEN`, which makes the endpoint require that token as
+`Authorization: Bearer …` — and it is never satisfied by a logged-in session.
+
+### Backup and restore
+
+`pg_dump` and `pg_restore` run inside the database container, so the host needs nothing but
+Docker.
+
+```sh
+make backup                                        # → backups/restest-20260807T130906Z.dump
+make restore FILE=backups/restest-20260807T130906Z.dump
+```
+
+The dump is taken in the custom format, compressed, in one transaction — so a backup taken under
+traffic is one moment rather than a smear across several — and the application keeps running.
+`backups/` is git-ignored: a dump holds every account's data.
+
+**Restoring replaces the database.** The script says so and asks for the database name before it
+does anything; `RESTEST_RESTORE_YES=1` skips the prompt for a scripted drill. It stops the
+application first, because restoring underneath a running one would leave the route table it
+holds in memory answering for endpoints that no longer exist. The database is dropped and
+recreated rather than restored over, so nothing the dump does not mention survives. Then the
+application starts, applies any migrations the backup predates, and the script waits for
+`/readyz` before reporting success.
+
+**A backup you have not restored is not a backup.** The drill:
+
+```sh
+make backup                                     # note the filename it prints
+docker compose exec -T db psql -U restest -d restest \
+  -c "delete from users where email = 'you@example.com';"
+make restore FILE=backups/restest-….dump
+docker compose exec -T db psql -U restest -d restest -c "select email from users;"
+```
+
+One thing to know before reading the result: the **demo project is reset to its seeds on every
+startup**, and a restore restarts the application. Documents written to `/m/demo/…` will not come
+back, whatever the backup holds — that is the demo working as designed, not the restore failing.
+Use an ordinary account and project as the canary, as above.
+
 ## Configuration
 
 Every variable is read once at startup and validated together, so a misconfigured process refuses
@@ -462,6 +669,21 @@ to start and reports every problem in one pass rather than one restart per mista
 | `RESTEST_LOG_RETENTION_MONTHS` | `3` | Months of request log kept, counting the current one, 1–120. Expiry detaches and drops that month's partition. |
 | `RESTEST_DEMO_ENABLED` | `true` | Provision the shared demo project at startup and offer it on the login page. `false` leaves an existing demo in the database alone rather than deleting it. |
 | `RESTEST_DEMO_RESET_INTERVAL` | `1h` | How often the demo is restored to its seeds, `1m`–`168h`. It also runs once at startup. |
+| `RESTEST_RATE_LIMIT_IP` | `50` | Mock requests a second per client address, 0–1000000. Zero turns the limit off. |
+| `RESTEST_RATE_LIMIT_PROJECT` | `200` | Mock requests a second per project, 0–1000000. Zero turns the limit off. |
+| `RESTEST_RATE_LIMIT_API` | `20` | Management API requests a second per credential, 0–1000000. Zero turns the limit off. |
+| `RESTEST_TRUSTED_PROXIES` | *(empty)* | Comma-separated addresses and CIDR blocks whose `X-Forwarded-For` is believed. Empty means the header is never read. |
+| `RESTEST_MAX_REQUEST_BODY` | `1048576` | Bytes of request body accepted, 4096–67108864. Applied before any handler reads one. |
+| `RESTEST_MAX_HEADER_BYTES` | `65536` | Bytes of request line and headers, 4096–1048576. |
+| `RESTEST_READ_HEADER_TIMEOUT` | `10s` | How long a client may take to send its headers, `1s`–`1h`. |
+| `RESTEST_READ_TIMEOUT` | `30s` | How long a client may take to send its whole request, `1s`–`1h`. |
+| `RESTEST_WRITE_TIMEOUT` | `30s` | How long the response may take, `1s`–`1h`. A delayed endpoint and the log tail lift this for themselves. |
+| `RESTEST_IDLE_TIMEOUT` | `120s` | How long a kept-alive connection may sit between requests, `1s`–`1h`. |
+| `RESTEST_METRICS_ENABLED` | `true` | Serve the Prometheus exposition at `/metrics`. `false` leaves the path answering 404. |
+| `RESTEST_METRICS_TOKEN` | *(empty)* | When set, `/metrics` requires it as `Authorization: Bearer …`. Never logged. |
+
+The rate limits and `RESTEST_TRUSTED_PROXIES` are explained in
+[Operating it](#operating-it), which has the reasoning and the failure modes.
 
 `RESTEST_BASE_URL` does two jobs: it is what the UI shows as the root of every mock URL, and its
 **scheme decides whether cookies are marked `Secure`**. A browser never returns a `Secure` cookie
@@ -469,7 +691,8 @@ over plain HTTP, so an instance behind TLS must set this to its `https` address 
 able to log in. Compose-level settings — ports, the database password, the bind interface — live
 in `.env`; see `.env.example`.
 
-The database password is never logged: `Config` implements `slog.LogValuer` and redacts it.
+The database password is never logged: `Config` implements `slog.LogValuer` and redacts it. Nor is
+`RESTEST_METRICS_TOKEN` — the startup line says whether one is set, not what it is.
 
 ## Make targets
 
@@ -478,6 +701,8 @@ The database password is never logged: `Config` implements `slog.LogValuer` and 
 | Target | What it does |
 |---|---|
 | `make up` / `down` / `logs` | The compose stack, with the git revision stamped into the image |
+| `make backup` | Dump the database into `backups/`, through `pg_dump` in the container |
+| `make restore FILE=…` | Stop the application, recreate the database, restore, wait for `/readyz` |
 | `make run` | Run the server on the host against the database in compose |
 | `make build` | Build into `bin/restest` |
 | `make test` | Unit tests, race detector on — no Docker needed |
@@ -552,6 +777,26 @@ token stops working. Against real Postgres: the hash in the row is the hash of t
 was issued, `last_used_at` is written by the statement that authenticates, an expired token is
 refused *and* not marked used, and a token reaches its own account's projects and nothing else.
 
+The hardening is tested at the level it is written. The rate limiter has unit tests of its own for
+the burst being spent and refilling at the rate, keys not spending each other, the sweep dropping
+buckets nothing has touched, the table being emptied rather than grown past its ceiling, and eight
+goroutines sharing one bucket under the race detector. Above it, handler tests prove that a mock
+request over the per-address limit and one over the per-project limit are both refused with the
+limit named in the body, that a slug no project has never becomes a key, that a refused request is
+**not** written to the request log, that a limit of zero serves everything, and that the interface
+is not limited at all. The API's key is a hash of the presented token and never the token itself,
+which is a test rather than a comment.
+
+The client address resolver has a table covering the header being ignored without a trusted proxy
+and from an untrusted peer, a forged prefix, repeated headers, ports, IPv6 in both forms, a
+mapped IPv4 peer, an unreadable hop, and a chain padded to five thousand entries. The security
+headers are tested on the interface, on static assets, on a mock response and on a mock 404 — and
+one test proves an endpoint's own headers **cannot** replace the sandbox, because that is the
+whole of why the header is written where it is. The body cap is tested through a mock write, the
+management API and a browser form, which is the point of applying it once above all three.
+`/metrics` is tested off, on, behind a token, with the wrong token, and with a logged-in session
+that must not be enough.
+
 `TestTheM2Milestone` through `TestTheM6Milestone` walk each milestone end to end: define it in
 the form, `curl` it, and — for M3 — post, fetch, filter, delete and reset; for M4, open the SSE
 stream, send a request, and read the row off the wire; for M5, read and write the demo from a
@@ -576,12 +821,16 @@ internal/
     datasets/         the built-in dataset seeds, embedded JSON
     dbgen/            sqlc output — generated, never edited
   mock/               inbound: the radix trie, the router, route expansion, suggestions
+  ratelimit/          a keyed token bucket, in-process, swept and bounded
+  metrics/            the Prometheus registry and collectors
   web/                handlers, middleware, sessions, CSRF, bearer authentication,
-                      the mock and collection handlers, and /api/v1/ (api*.go)
+                      the mock and collection handlers, /api/v1/ (api*.go), the
+                      security headers, the rate limits and the client address
     templates/        Go templates, embedded
     static/           generated CSS and vendored JS and CodeMirror, embedded
   integration/        tests needing a real Postgres, behind a build tag
 migrations/           goose migrations, embedded
+scripts/              backup and restore, through pg_dump in the container
 notes/                session history, append-only
 ```
 

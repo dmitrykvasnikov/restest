@@ -393,6 +393,10 @@ type browser struct {
 	t      *testing.T
 	client *http.Client
 	url    string
+	// srv is the server behind the client, for the handful of tests that check
+	// state the responses do not expose — the size of a rate limiter's table,
+	// mostly.
+	srv *Server
 }
 
 // newBrowser starts the server and returns a client that follows redirects and
@@ -424,7 +428,7 @@ func newBrowserWith(t *testing.T, store Store, tweak func(*Options)) *browser {
 
 	client := ts.Client()
 	client.Jar = jar
-	return &browser{t: t, client: client, url: ts.URL}
+	return &browser{t: t, client: client, url: ts.URL, srv: srv}
 }
 
 // noFollow stops the client following redirects, for tests that care about the

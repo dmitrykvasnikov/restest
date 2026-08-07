@@ -107,6 +107,17 @@ func (t *Table) Lookup(slug, method, path string) Result {
 	}
 }
 
+// HasProject reports whether any project has this slug.
+//
+// It is the cheapest question the table answers, and the rate limiter asks it
+// before counting a request against a project: a slug nothing answers to must
+// not become a key in the limiter's table, or inventing slugs would be a way to
+// fill it.
+func (t *Table) HasProject(slug string) bool {
+	_, ok := t.projects[slug]
+	return ok
+}
+
 // Routes reports how many routes the table holds, for the line logged after a
 // rebuild. A table that suddenly holds none is worth being able to see.
 func (t *Table) Routes() int {

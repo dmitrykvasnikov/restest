@@ -2,6 +2,8 @@ package config
 
 import (
 	"log/slog"
+	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +68,143 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DemoResetInterval != time.Hour {
 		t.Errorf("DemoResetInterval = %v, want 1h", cfg.DemoResetInterval)
 	}
+	// Hardening defaults. The rate limits are on by default: an instance that
+	// wants none says so, rather than being handed none by accident.
+	if cfg.RateLimitIP != 50 || cfg.RateLimitProject != 200 || cfg.RateLimitAPI != 20 {
+		t.Errorf("rate limits = ip %d, project %d, api %d; want 50, 200, 20",
+			cfg.RateLimitIP, cfg.RateLimitProject, cfg.RateLimitAPI)
+	}
+	// And nobody is believed about a client's address until an operator names
+	// the proxy in front of the instance.
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies = %v, want none by default", cfg.TrustedProxies)
+	}
+	if cfg.MaxRequestBody != 1024*1024 {
+		t.Errorf("MaxRequestBody = %d, want 1048576", cfg.MaxRequestBody)
+	}
+	if cfg.MaxHeaderBytes != 64*1024 {
+		t.Errorf("MaxHeaderBytes = %d, want 65536", cfg.MaxHeaderBytes)
+	}
+	if cfg.ReadHeaderTimeout != 10*time.Second || cfg.ReadTimeout != 30*time.Second ||
+		cfg.WriteTimeout != 30*time.Second || cfg.IdleTimeout != 120*time.Second {
+		t.Errorf("timeouts = %v, %v, %v, %v; want 10s, 30s, 30s, 120s",
+			cfg.ReadHeaderTimeout, cfg.ReadTimeout, cfg.WriteTimeout, cfg.IdleTimeout)
+	}
+	if !cfg.MetricsEnabled {
+		t.Error("MetricsEnabled is off by default")
+	}
+	if cfg.MetricsToken != "" {
+		t.Errorf("MetricsToken = %q, want empty by default", cfg.MetricsToken)
+	}
+}
+
+// Zero is how a limit is turned off, and it has to be reachable: the range on
+// the setting starts there rather than at one.
+func TestARateLimitOfZeroIsAccepted(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"RESTEST_DATABASE_URL":       "postgres://localhost/db",
+		"RESTEST_RATE_LIMIT_IP":      "0",
+		"RESTEST_RATE_LIMIT_PROJECT": "0",
+		"RESTEST_RATE_LIMIT_API":     "0",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RateLimitIP != 0 || cfg.RateLimitProject != 0 || cfg.RateLimitAPI != 0 {
+		t.Errorf("rate limits = %d, %d, %d; want all zero",
+			cfg.RateLimitIP, cfg.RateLimitProject, cfg.RateLimitAPI)
+	}
+}
+
+func TestLoadRejectsANegativeRateLimit(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"RESTEST_DATABASE_URL":  "postgres://localhost/db",
+		"RESTEST_RATE_LIMIT_IP": "-1",
+	}))
+	if err == nil {
+		t.Fatal("Load accepted a negative rate limit")
+	}
+	if !strings.Contains(err.Error(), "RESTEST_RATE_LIMIT_IP") {
+		t.Errorf("error %q does not name the variable", err)
+	}
+}
+
+func TestTrustedProxiesAreParsedOrRefused(t *testing.T) {
+	t.Run("accepted", func(t *testing.T) {
+		cfg, err := Load(env(map[string]string{
+			"RESTEST_DATABASE_URL": "postgres://localhost/db",
+			// Spaces, an address, a block, a v6 block, and a stray empty field
+			// from a trailing comma — all of which a compose file produces.
+			"RESTEST_TRUSTED_PROXIES": " 172.17.0.1 , 10.0.0.0/8, fd00::/8, ",
+		}))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		want := []netip.Prefix{
+			netip.MustParsePrefix("172.17.0.1/32"),
+			netip.MustParsePrefix("10.0.0.0/8"),
+			netip.MustParsePrefix("fd00::/8"),
+		}
+		if !reflect.DeepEqual(cfg.TrustedProxies, want) {
+			t.Errorf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+		}
+	})
+
+	t.Run("masked", func(t *testing.T) {
+		// A block written with host bits set means the block, not a prefix that
+		// would then fail to contain the address it was written from.
+		cfg, err := Load(env(map[string]string{
+			"RESTEST_DATABASE_URL":    "postgres://localhost/db",
+			"RESTEST_TRUSTED_PROXIES": "10.4.3.2/8",
+		}))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := cfg.TrustedProxiesString(); got != "10.0.0.0/8" {
+			t.Errorf("TrustedProxies = %s, want 10.0.0.0/8", got)
+		}
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		for _, bad := range []string{"not-an-ip", "10.0.0.0/64", "localhost", "10.0.0.1-10.0.0.9"} {
+			t.Run(bad, func(t *testing.T) {
+				_, err := Load(env(map[string]string{
+					"RESTEST_DATABASE_URL":    "postgres://localhost/db",
+					"RESTEST_TRUSTED_PROXIES": bad,
+				}))
+				if err == nil {
+					t.Fatalf("Load accepted %q as a trusted proxy", bad)
+				}
+				if !strings.Contains(err.Error(), "RESTEST_TRUSTED_PROXIES") {
+					t.Errorf("error %q does not name the variable", err)
+				}
+			})
+		}
+	})
+}
+
+// The startup log carries the whole configuration, and a metrics token in it is
+// a token in whatever aggregates the log.
+func TestTheMetricsTokenIsNeverLogged(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"RESTEST_DATABASE_URL":  "postgres://u:secret@localhost/db",
+		"RESTEST_METRICS_TOKEN": "hunter2",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	logged := cfg.LogValue().String()
+	if strings.Contains(logged, "hunter2") {
+		t.Errorf("the metrics token is in the log line: %s", logged)
+	}
+	if !strings.Contains(logged, "metrics_token_set=true") {
+		t.Errorf("the log line does not say the token is set: %s", logged)
+	}
+	if strings.Contains(logged, "secret") {
+		t.Errorf("the database password is in the log line: %s", logged)
+	}
 }
 
 // The reset interval has a floor because of what the setting means rather than
@@ -120,6 +259,20 @@ func TestLoadOverrides(t *testing.T) {
 		// The demo project: an instance that does not want to serve one says so.
 		"RESTEST_DEMO_ENABLED":        "false",
 		"RESTEST_DEMO_RESET_INTERVAL": "15m",
+		// Hardening: the server's own timeouts, the caps on what one request may
+		// be, the rate limits and who may be believed about a client's address.
+		"RESTEST_READ_HEADER_TIMEOUT": "5s",
+		"RESTEST_READ_TIMEOUT":        "20s",
+		"RESTEST_WRITE_TIMEOUT":       "25s",
+		"RESTEST_IDLE_TIMEOUT":        "60s",
+		"RESTEST_MAX_HEADER_BYTES":    "16384",
+		"RESTEST_MAX_REQUEST_BODY":    "524288",
+		"RESTEST_RATE_LIMIT_IP":       "5",
+		"RESTEST_RATE_LIMIT_PROJECT":  "25",
+		"RESTEST_RATE_LIMIT_API":      "2",
+		"RESTEST_TRUSTED_PROXIES":     "10.0.0.0/8, 192.168.1.7",
+		"RESTEST_METRICS_ENABLED":     "false",
+		"RESTEST_METRICS_TOKEN":       "scrape-me",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -138,8 +291,24 @@ func TestLoadOverrides(t *testing.T) {
 		LogRetentionMonths: 12,
 		DemoEnabled:        false,
 		DemoResetInterval:  15 * time.Minute,
+		ReadHeaderTimeout:  5 * time.Second,
+		ReadTimeout:        20 * time.Second,
+		WriteTimeout:       25 * time.Second,
+		IdleTimeout:        60 * time.Second,
+		MaxHeaderBytes:     16384,
+		MaxRequestBody:     524288,
+		RateLimitIP:        5,
+		RateLimitProject:   25,
+		RateLimitAPI:       2,
+		TrustedProxies: []netip.Prefix{
+			netip.MustParsePrefix("10.0.0.0/8"),
+			// A bare address becomes the single-address block it means.
+			netip.MustParsePrefix("192.168.1.7/32"),
+		},
+		MetricsEnabled: false,
+		MetricsToken:   "scrape-me",
 	}
-	if cfg != want {
+	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("Load = %+v, want %+v", cfg, want)
 	}
 }

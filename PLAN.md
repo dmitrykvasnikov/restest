@@ -6,8 +6,9 @@ Written 2026-08-02, before any code.
 Milestones are sequenced so that each one ends at a state that can be demonstrated and, from
 M2 onward, is genuinely usable. Nothing here is a deadline; the ordering is the point.
 
-**Status (2026-08-07):** M0–M6 merged to master. M7 (hardening) is next; see
-`notes/notes_07_1.md` § "Next step" for where to pick up.
+**Status (2026-08-07):** M0–M7 merged to master. **The MVP is complete.** What remains is in
+"Deliberately deferred" below and in the gaps each milestone carried forward; see
+`notes/notes_08_1.md` § "Next step".
 
 ---
 
@@ -128,15 +129,40 @@ CSRF exemption, hashing without a KDF, expiry enforced in SQL, and why no route 
 **Carried forward:** tokens are account-wide — there is no per-project scope and no read-only
 token, so a token is exactly as powerful as the account that made it. The log is still without
 search or filters, over the API as in the browser. There is no rate limiting on `/api/v1/`;
-that is M7's.
+that is M7's — **closed by M7**, which limits it per credential.
 
-## M7 — Hardening ⬅ next up (feature 08, not started)
+## M7 — Hardening ✅ done (feature/08-hardening)
 
-- [ ] Per-IP and per-project rate limiting on mock traffic; request body size caps; server
-      read/write timeouts.
-- [ ] Security headers, and a strict CSP that the vendored CodeMirror actually satisfies.
-- [ ] Backup and restore procedure, written down and tested by restoring.
-- [ ] Prometheus metrics: request rate, match rate, latency, exchange write queue depth.
+- [x] Per-IP and per-project rate limiting on mock traffic — and on `/api/v1/` too, per
+      credential, which M6 carried forward. In-process token buckets, swept and bounded; a rate
+      of zero turns one off. Request body size caps, applied once above every handler; header
+      caps; server read, write and idle timeouts, all configurable.
+- [x] Security headers, and a strict CSP that the vendored CodeMirror actually satisfies —
+      verified in a real browser, on every page, with zero violations.
+- [x] **And a second policy that was not on the list**: everything under `/m/{slug}/` is served
+      with `Content-Security-Policy: sandbox`, unoverridable by the endpoint's own headers. A
+      project's response body is written by whoever owns the project and served from this origin,
+      which without a policy is stored XSS arriving as a feature. It belonged here.
+- [x] Backup and restore procedure, written down and tested by restoring: an account deleted from
+      a running instance and brought back from a dump.
+- [x] Prometheus metrics: request rate, match rate, latency, exchange write queue depth, rate
+      limiter refusals and route table size, at `/metrics`, optionally behind a token.
+- [x] **`X-Forwarded-For`, which M0 deferred to this milestone.** Read only from peers named in
+      `RESTEST_TRUSTED_PROXIES`, right to left, stopping at the first address no trusted hop
+      wrote. Unset, it is not read at all.
+
+**Done when:** the process refuses what it should refuse, says what it is doing, and can be
+restored from a backup. Met.
+
+**Decisions:** `DESIGN.md` §8.2 — the three limit keys and why the interface has none, the
+limiter sitting outside the recorder, the table emptied rather than evicted from, the two
+opposite content policies, the headers written after the handler, and the restore into a
+recreated database.
+
+**Carried forward:** the limits are per process, so two instances enforce each twice — the
+in-process version `DESIGN.md` §9.1 said would come first. Refused requests are not in the
+inspector. The request log still has no search or filters, the oldest gap in the project. Tokens
+are still account-wide.
 
 ---
 

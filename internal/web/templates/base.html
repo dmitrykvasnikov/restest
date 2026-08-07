@@ -7,6 +7,18 @@
   {{/* Inline so that the browser does not ask for a favicon it will not get. */}}
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#128225;</text></svg>">
   <link rel="stylesheet" href="{{ .Asset "css/app.css" }}">
+  {{/* Configuration through a meta tag rather than a script, because a script
+       here would be an inline one and the Content-Security-Policy does not
+       allow those (security.go).
+
+       includeIndicatorStyles: HTMX injects a <style> element for its
+       .htmx-indicator rules, which `style-src 'self'` refuses. The rules are in
+       tailwind.css instead, so the feature works and the policy stays strict.
+
+       allowEval: HTMX compiles hx-vals="js:…" and trigger filters with the
+       Function constructor, which `script-src 'self'` refuses. Nothing here
+       uses either; saying so stops HTMX from trying and warning. */}}
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false}'>
   <script src="{{ .Asset "js/htmx.min.js" }}" defer></script>
   {{/* Pages that need more than the shared assets fill this in. The editor is
        ~450 kB of vendored CodeMirror and belongs on the one page that uses it,

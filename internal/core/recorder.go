@@ -135,6 +135,15 @@ func (r *Recorder) Record(ex Exchange) {
 // gap in the log is visible as a gap rather than as an absence of traffic.
 func (r *Recorder) Dropped() int64 { return r.dropped.Load() + r.failed.Load() }
 
+// Queued reports how many exchanges are waiting to be written, and Capacity how
+// many could be. Together they are the queue depth gauge in the metrics: drops
+// say the buffer has already overflowed, and a depth climbing towards its
+// capacity says it is about to. One is a post-mortem, the other is a warning.
+func (r *Recorder) Queued() int { return len(r.queue) }
+
+// Capacity is the size the buffer was built with.
+func (r *Recorder) Capacity() int { return cap(r.queue) }
+
 // Run drains the queue until ctx is cancelled, then writes what is left and
 // returns. It is meant to be run in its own goroutine for the lifetime of the
 // process.

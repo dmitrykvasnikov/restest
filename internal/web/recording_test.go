@@ -22,6 +22,13 @@ const logSlug = "checkout"
 // actually do.
 func logBrowser(t *testing.T, log *fakeLog, bodyLimit int, endpoints ...mockEndpoint) *browser {
 	t.Helper()
+	return logBrowserWith(t, log, bodyLimit, nil, endpoints...)
+}
+
+// logBrowserWith is logBrowser for a test that also needs to adjust the
+// server's options — the rate limits, mostly.
+func logBrowserWith(t *testing.T, log *fakeLog, bodyLimit int, tweak func(*Options), endpoints ...mockEndpoint) *browser {
+	t.Helper()
 
 	project := core.MockProject{ID: testProjectID, Slug: logSlug}
 	data := core.MockData{Projects: []core.MockProject{project}}
@@ -52,6 +59,9 @@ func logBrowser(t *testing.T, log *fakeLog, bodyLimit int, endpoints ...mockEndp
 		o.Recorder = log
 		o.LogBodyLimit = bodyLimit
 		o.LogRetentionMonths = 3
+		if tweak != nil {
+			tweak(o)
+		}
 	})
 }
 

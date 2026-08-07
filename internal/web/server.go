@@ -12,13 +12,17 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
 
 	"github.com/dmitrykvasnikov/restest/internal/core"
+	"github.com/dmitrykvasnikov/restest/internal/metrics"
 	"github.com/dmitrykvasnikov/restest/internal/mock"
+	"github.com/dmitrykvasnikov/restest/internal/ratelimit"
 )
 
 // Pinger is the narrowest view of the database: a way to ask whether it is
@@ -121,7 +125,47 @@ type Options struct {
 	// matcher treats it as one — only whether the pages an anonymous visitor
 	// sees offer it.
 	DemoEnabled bool
+
+	// Metrics is the instrumentation. Optional, like Recorder: without one
+	// nothing is counted and /metrics is not registered, which is what the
+	// handler tests run with.
+	Metrics Metrics
+	// MetricsToken, when set, is the bearer token GET /metrics requires.
+	MetricsToken string
+
+	// The rate limits, in requests per second per key. Zero turns one off. See
+	// ratelimit.go for what each is keyed on and why the interface has none.
+	RateLimitIP      int
+	RateLimitProject int
+	RateLimitAPI     int
+	// TrustedProxies are the peers whose X-Forwarded-For is believed. Empty
+	// means the header is never read and every request is attributed to the
+	// address it actually arrived from (clientip.go).
+	TrustedProxies []netip.Prefix
+	// MaxRequestBody caps every request body. Zero falls back to
+	// defaultMaxRequestBody.
+	MaxRequestBody int
 }
+
+// Metrics is what this package reports to. An interface, and an optional one,
+// so that a handler test needs neither a registry nor the Prometheus library —
+// the same arrangement Recorder has, for the same reason.
+type Metrics interface {
+	ObserveRequest(surface, method string, status int, d time.Duration)
+	ObserveMockOutcome(outcome string)
+	ObserveRateLimited(scope string)
+	// Handler serves the exposition format at /metrics.
+	Handler() http.Handler
+}
+
+// nopMetrics stands in when a Server is built without instrumentation, so that
+// every call site can report unconditionally.
+type nopMetrics struct{}
+
+func (nopMetrics) ObserveRequest(string, string, int, time.Duration) {}
+func (nopMetrics) ObserveMockOutcome(string)                         {}
+func (nopMetrics) ObserveRateLimited(string)                         {}
+func (nopMetrics) Handler() http.Handler                             { return http.NotFoundHandler() }
 
 // Server carries the dependencies shared by all handlers.
 type Server struct {
@@ -139,12 +183,31 @@ type Server struct {
 
 	logRetentionMonths int
 	demoEnabled        bool
+
+	metrics      Metrics
+	metricsToken string
+
+	mockIPLimiter      *ratelimit.Limiter
+	mockProjectLimiter *ratelimit.Limiter
+	apiLimiter         *ratelimit.Limiter
+	// The configured rates, kept so that a 429 can say what the limit is
+	// rather than only that one was reached.
+	rateLimitIP      int
+	rateLimitProject int
+	rateLimitAPI     int
+
+	trustedProxies []netip.Prefix
+	maxRequestBody int
 }
 
 // defaultLogBodyLimit is how much of a body is recorded when the caller did not
 // say. It matches the default of RESTEST_LOG_BODY_LIMIT, so a Server built by
 // hand behaves like the one main.go builds.
 const defaultLogBodyLimit = 64 * 1024
+
+// defaultMaxRequestBody is the cap on a request body when the caller did not
+// say, matching the default of RESTEST_MAX_REQUEST_BODY.
+const defaultMaxRequestBody = 1 << 20
 
 // New returns a Server with its routes and templates ready. Templates are
 // parsed here rather than on first use, so a broken template stops the process
@@ -166,6 +229,15 @@ func New(opts Options) (*Server, error) {
 	if limit <= 0 {
 		limit = defaultLogBodyLimit
 	}
+	maxBody := opts.MaxRequestBody
+	if maxBody <= 0 {
+		maxBody = defaultMaxRequestBody
+	}
+	instruments := opts.Metrics
+	if instruments == nil {
+		instruments = nopMetrics{}
+	}
+	mockIP, mockProject, api := newLimiters(opts)
 
 	s := &Server{
 		logger:       opts.Logger,
@@ -182,18 +254,85 @@ func New(opts Options) (*Server, error) {
 
 		logRetentionMonths: opts.LogRetentionMonths,
 		demoEnabled:        opts.DemoEnabled,
+
+		metrics:      instruments,
+		metricsToken: opts.MetricsToken,
+
+		mockIPLimiter:      mockIP,
+		mockProjectLimiter: mockProject,
+		apiLimiter:         api,
+		rateLimitIP:        opts.RateLimitIP,
+		rateLimitProject:   opts.RateLimitProject,
+		rateLimitAPI:       opts.RateLimitAPI,
+
+		trustedProxies: opts.TrustedProxies,
+		maxRequestBody: maxBody,
 	}
 	s.routes()
 	return s, nil
 }
 
+// Limiters exposes the rate limiters so that main.go can sweep them and
+// publish their sizes. They are built here rather than passed in because their
+// rates are part of the server's configuration, and a limiter nobody sweeps is
+// a map that only ever grows to its cap.
+func (s *Server) Limiters() map[string]*ratelimit.Limiter {
+	return map[string]*ratelimit.Limiter{
+		metrics.ScopeMockIP:      s.mockIPLimiter,
+		metrics.ScopeMockProject: s.mockProjectLimiter,
+		metrics.ScopeAPI:         s.apiLimiter,
+	}
+}
+
 // Handler returns the fully wrapped HTTP handler for the application.
 //
-// Order matters: the id is assigned first so everything below can log it, the
-// access log wraps the panic guard so that a recovered panic is still reported
-// as the 500 it became, and the routes run innermost.
+// Order matters, from the outside in:
+//
+//   - the request id is assigned first, so everything below can log it;
+//   - the client address is resolved next, because the access log, the request
+//     inspector and the rate limiters must all agree about who this is, and
+//     agreement is cheapest when the walk happens once;
+//   - the body cap is applied before anything reads a body, which is the only
+//     place it can be applied once and cover every handler;
+//   - the access log wraps the panic guard, so a recovered panic is still
+//     reported as the 500 it became;
+//   - the metrics observation sits inside the panic guard, so that a request
+//     which panicked is counted as the 500 it was answered with rather than
+//     not counted at all;
+//   - the security headers sit inside that, close enough to the routes to know
+//     which pattern matched — the mock server and the interface need opposite
+//     policies (security.go);
+//   - the routes run innermost.
 func (s *Server) Handler() http.Handler {
-	return withRequestID(s.logger, logRequests(recoverPanic(s.withSession(s.mux))))
+	var h http.Handler = s.mux
+	h = s.withSession(h)
+	h = s.withSecurityHeaders(h)
+	h = s.observe(h)
+	h = recoverPanic(h)
+	h = logRequests(h)
+	h = s.withBodyLimit(h)
+	h = s.withClientIP(h)
+	return withRequestID(s.logger, h)
+}
+
+// withBodyLimit caps every request body before a handler can read one.
+//
+// One cap in one place rather than a MaxBytesReader in each handler that reads
+// a body: the handlers that forget are exactly the ones that would matter, and
+// a mock server is by design something people point half-finished clients at.
+// Handlers that want a tighter cap still set one — the management API keeps its
+// own, because a definition is a smaller thing than an upload.
+//
+// http.MaxBytesReader also arms the server to close the connection rather than
+// read a body it has already refused, which is what stops a caller from making
+// this process read a gigabyte it will throw away.
+func (s *Server) withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, int64(s.maxRequestBody))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) routes() {
@@ -202,6 +341,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+pathHealthz, s.handleHealthz)
 	s.mux.HandleFunc("GET "+pathReadyz, s.handleReadyz)
 	s.mux.Handle("GET "+pathStatic, s.staticHandler())
+
+	// The Prometheus exposition, registered only when this Server was built
+	// with instrumentation. An instance with metrics off answers 404 there,
+	// which is a truer answer than 200 with an empty body.
+	if _, off := s.metrics.(nopMetrics); !off {
+		s.mux.HandleFunc("GET "+pathMetrics, s.handleMetrics)
+	}
 
 	// Public pages.
 	s.mux.HandleFunc("GET /{$}", s.handleHome)
@@ -284,8 +430,10 @@ func (s *Server) routes() {
 	// and CSRF middleware — see isUnsessioned.
 	//
 	// The recording middleware wraps this one route and nothing else: the log
-	// is of the traffic a project serves, not of somebody administering it.
-	s.mux.Handle(patternMock, s.recordExchanges(http.HandlerFunc(s.handleMock)))
+	// is of the traffic a project serves, not of somebody administering it. The
+	// rate limiter wraps the recorder in turn, so a refused request costs
+	// neither a captured body nor a row — see ratelimit.go.
+	s.mux.Handle(patternMock, s.limitMock(s.recordExchanges(http.HandlerFunc(s.handleMock))))
 
 	// Anything else. Registered last and matched last: every pattern above is
 	// more specific, so this only sees paths nothing claimed.
@@ -329,7 +477,8 @@ func (s *Server) withSession(h http.Handler) http.Handler {
 // one. Sending it through nosurf would make every write to a mock 400.
 func isUnsessioned(pattern string) bool {
 	switch pattern {
-	case "GET " + pathHealthz, "GET " + pathReadyz, "GET " + pathStatic, patternMock:
+	case "GET " + pathHealthz, "GET " + pathReadyz, "GET " + pathStatic,
+		"GET " + pathMetrics, patternMock:
 		return true
 	default:
 		return false
